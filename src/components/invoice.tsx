@@ -62,7 +62,7 @@ export function Invoice({ data }: { data: InvoiceData }) {
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-4 flex justify-end gap-2 print:hidden">
-        <DownloadPdfButton targetRef={printRef} filename={`invoice-${data.invoiceNumber}`} label="Download PDF" />
+        <DownloadPdfButton targetRef={printRef as unknown as React.RefObject<HTMLElement>} filename={`invoice-${data.invoiceNumber}`} label="Download PDF" />
         <button
           type="button"
           onClick={() => window.print()}
