@@ -1,54 +1,79 @@
 "use client";
 
-import { useState } from "react";
-import { Download } from "lucide-react";
+import { useState, type RefObject } from "react";
+import { Download, Loader2 } from "lucide-react";
 
-type Props<T extends HTMLElement = HTMLElement> = {
-  targetRef: React.RefObject<T | null>;
+export function DownloadPdfButton({
+  targetRef,
+  filename,
+  label = "Download PDF",
+  className = "",
+}: {
+  targetRef: React.RefObject<HTMLElement | null>
   filename: string;
   label?: string;
-};
+  className?: string;
+}) {
+  const [generating, setGenerating] = useState(false);
 
-export function DownloadPdfButton({ targetRef, filename, label = "Download PDF" }: Props) {
-  const [loading, setLoading] = useState(false);
-
-  const handleDownload = async () => {
+  async function handleDownload() {
     if (!targetRef.current) return;
-    
-    setLoading(true);
+    setGenerating(true);
+
     try {
-      // dynamic import so it only loads on client
-      const html2canvas = (await import("html2canvas")).default;
-      const { jsPDF } = await import("jspdf");
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import("html2canvas"),
+        import("jspdf"),
+      ]);
 
       const canvas = await html2canvas(targetRef.current, {
         scale: 2,
+        backgroundColor: "#ffffff",
         useCORS: true,
       });
 
       const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF("p", "mm", "a4");
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      
-      pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`${filename}.pdf`);
-    } catch (err) {
-      console.error("PDF generation failed:", err);
+
+      // A4 in points: 595.28 x 841.89. Scale the captured canvas to fit width,
+      // and split across multiple pages if the content is taller than one page.
+      const pdf = new jsPDF({ unit: "pt", format: "a4" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+
+      const imgWidth = pageWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      pdf.save(filename.endsWith(".pdf") ? filename : `${filename}.pdf`);
     } finally {
-      setLoading(false);
+      setGenerating(false);
     }
-  };
+  }
 
   return (
     <button
       type="button"
       onClick={handleDownload}
-      disabled={loading}
-      className="inline-flex items-center gap-2 rounded-md border border-border bg-white px-4 py-2 text-sm font-semibold hover:bg-muted disabled:opacity-50"
+      disabled={generating}
+      className={
+        className ||
+        "inline-flex items-center gap-2 rounded-md border border-input bg-surface px-4 py-2 text-sm font-semibold hover:bg-muted disabled:opacity-50"
+      }
     >
-      <Download className="h-4 w-4" />
-      {loading ? "Downloading..." : label}
+      {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+      {generating ? "Generating..." : label}
     </button>
   );
 }
