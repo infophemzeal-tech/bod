@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2 } from "lucide-react";
 
+export const dynamic = "force-dynamic";
+
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
