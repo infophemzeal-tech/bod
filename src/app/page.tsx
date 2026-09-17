@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { AppShell, PageHeading } from "@/components/AppShell";
+import { getProfile } from "@/lib/auth";
 import { UserPlus, Wallet, Map, Users } from "lucide-react";
 
 const CARDS = [
@@ -29,7 +31,12 @@ const CARDS = [
   },
 ];
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const profile = await getProfile();
+  if (!profile) {
+    redirect("/login");
+  }
+
   return (
     <AppShell>
       <PageHeading
