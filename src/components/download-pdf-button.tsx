@@ -9,7 +9,7 @@ export function DownloadPdfButton({
   label = "Download PDF",
   className = "",
 }: {
-  targetRef: React.RefObject<HTMLElement | null>
+  targetRef: RefObject<HTMLElement | null>;
   filename: string;
   label?: string;
   className?: string;
