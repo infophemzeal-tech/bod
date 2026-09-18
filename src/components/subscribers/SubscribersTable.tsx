@@ -1,21 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
-import {
-  Loader2,
-  Search,
-  RefreshCw,
-  Users,
-  AlertCircle,
-  Eye,
-  Pencil,
-  Trash2,
-} from "lucide-react";
+import { Loader2, Search, RefreshCw, Users, AlertCircle, Eye, Pencil, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useToasts, ToastStack } from "@/components/toast";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toTitleCase } from "@/lib/text";
+import { PageHeading } from "@/components/AppShell";
 
 type Subscriber = {
   id: string;
@@ -36,312 +28,185 @@ type Subscriber = {
   plot_preference: string[];
   plot_preference_other: string | null;
   referrer_name: string | null;
-  status: "draft" | "registered";
+  status: "draft" | "registered" | "completed";
 };
 
-const ESTATES = [
-  "B-Top Garden, Shimawa",
-  "Royal Heritage Estate, Mowe",
-  "Diamond Court, Sangotedo",
-  "Emerald Vale Estate, Simawa",
-];
 const PAYMENT_OPTIONS = ["Outright", "Quarterly", "Monthly"];
 const STATUSES = ["draft", "registered", "completed"] as const;
 
+function useDebounced<T>(value: T, delay = 300) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
 function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    completed: "bg-emerald-100 text-emerald-800",
-    registered: "bg-blue-100 text-blue-800",
-    draft: "bg-amber-100 text-amber-800",
+  const map: Record<string, string> = {
+    completed: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20",
+    registered: "bg-blue-50 text-blue-700 ring-1 ring-blue-600/20",
+    draft: "bg-amber-50 text-amber-700 ring-1 ring-amber-600/20",
   };
-  const labels: Record<string, string> = {
-    completed: "Completed",
-    registered: "Registered",
-    draft: "Draft",
-  };
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-        styles[status] ?? "bg-muted text-foreground"
-      }`}
-    >
-      {labels[status] ?? status}
-    </span>
-  );
+  return <span className={`inline-flex rounded-full px-2.5 py-1 text- font-semibold ${map[status]?? "bg-muted"}`}>{toTitleCase(status)}</span>;
+}
+
+// Stable date - prevents hydration mismatch
+function formatDate(iso: string) {
+  try {
+    return new Date(iso).toISOString().slice(0, 10); // YYYY-MM-DD - same on server & client
+  } catch { return iso; }
 }
 
 export function SubscribersPage() {
+  const [mounted, setMounted] = useState(false);
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [estates, setEstates] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false); // FIX: start false, not true
   const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [estateFilter, setEstateFilter] = useState<string>("all");
-  const [paymentFilter, setPaymentFilter] = useState<string>("all");
+  const debouncedSearch = useDebounced(search, 300);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [estateFilter, setEstateFilter] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
 
   const [deleteTarget, setDeleteTarget] = useState<Subscriber | null>(null);
   const [deleting, setDeleting] = useState(false);
-
   const { toasts, pushToast, dismissToast } = useToasts();
 
-  async function loadSubscribers() {
+  useEffect(() => { setMounted(true); }, []);
+
+  const loadSubscribers = useCallback(async () => {
     setLoading(true);
     setError(null);
-
     const supabase = createClient();
-    const { data, error } = await supabase
-      .from("subscribers")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    setLoading(false);
-
-    if (error) {
-      setError(error.message);
-      return;
+    const [{ data, error: subError }, { data: estateData }] = await Promise.all([
+      supabase.from("subscribers").select("*").order("created_at", { ascending: false }),
+      supabase.from("estates").select("name").order("name"),
+    ]);
+    if (subError) setError(subError.message);
+    else {
+      setSubscribers((data as Subscriber[])?? []);
+      if (estateData) setEstates(estateData.map((e) => e.name));
     }
-
-    setSubscribers((data as Subscriber[]) ?? []);
-  }
-
-  useEffect(() => {
-    loadSubscribers();
+    setLoading(false);
   }, []);
 
+  useEffect(() => { if (mounted) loadSubscribers(); }, [mounted, loadSubscribers]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, estateFilter, paymentFilter]);
+
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
+    const q = debouncedSearch.trim().toLowerCase();
     return subscribers.filter((s) => {
-      if (statusFilter !== "all" && s.status !== statusFilter) return false;
-      if (estateFilter !== "all" && s.preferred_estate !== estateFilter) return false;
-      if (paymentFilter !== "all" && s.payment_option !== paymentFilter) return false;
-
+      if (statusFilter!== "all" && s.status!== statusFilter) return false;
+      if (estateFilter!== "all" && s.preferred_estate!== estateFilter) return false;
+      if (paymentFilter!== "all" && s.payment_option!== paymentFilter) return false;
       if (q) {
-        const haystack = [
-          s.surname,
-          s.other_names,
-          s.phone,
-          s.email ?? "",
-          s.referrer_name ?? "",
-        ]
-          .join(" ")
-          .toLowerCase();
+        const haystack = [s.surname, s.other_names, s.phone, s.email?? "", s.preferred_estate].join(" ").toLowerCase();
         if (!haystack.includes(q)) return false;
       }
-
       return true;
     });
-  }, [subscribers, search, statusFilter, estateFilter, paymentFilter]);
+  }, [subscribers, debouncedSearch, statusFilter, estateFilter, paymentFilter]);
 
-  const totalPlots = useMemo(
-    () => filtered.reduce((sum, s) => sum + (s.number_of_plots || 0), 0),
-    [filtered]
-  );
+  const paginated = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE) || 1;
+  const totalPlots = useMemo(() => filtered.reduce((sum, s) => sum + (s.number_of_plots || 0), 0), [filtered]);
 
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleting(true);
-
     const supabase = createClient();
-    const { error } = await supabase
-      .from("subscribers")
-      .delete()
-      .eq("id", deleteTarget.id);
-
-    setDeleting(false);
-
-    if (error) {
-      pushToast("error", `Delete failed: ${error.message}`);
-      return;
+    const { error: rpcErr } = await supabase.rpc("delete_subscriber_and_restore_plot", { p_subscriber_id: deleteTarget.id });
+    if (rpcErr) {
+      const { error } = await supabase.from("subscribers").delete().eq("id", deleteTarget.id);
+      if (error) { setDeleting(false); pushToast("error", error.message); return; }
     }
-
-    setSubscribers((prev) => prev.filter((s) => s.id !== deleteTarget.id));
-    pushToast("ok", `${deleteTarget.surname} ${deleteTarget.other_names} was deleted.`);
+    setDeleting(false);
+    setSubscribers((prev) => prev.filter((s) => s.id!== deleteTarget.id));
+    pushToast("ok", `${deleteTarget.surname} deleted.`);
     setDeleteTarget(null);
   }
+
+  if (!mounted) return null; // Prevent hydration mismatch completely
 
   return (
     <div className="space-y-5">
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
+      <ConfirmDialog open={!!deleteTarget} title="Delete subscriber?" description={deleteTarget? `Remove ${deleteTarget.surname} ${deleteTarget.other_names} and restore ${deleteTarget.number_of_plots} plot(s)?` : ""} confirmLabel="Delete" loading={deleting} onConfirm={confirmDelete} onCancel={() => setDeleteTarget(null)} />
 
-      <ConfirmDialog
-        open={!!deleteTarget}
-        title="Delete subscriber?"
-        description={
-          deleteTarget
-            ? `This will permanently remove ${deleteTarget.title ?? ""} ${deleteTarget.surname} ${deleteTarget.other_names} from the database. This cannot be undone.`
-            : ""
+      <PageHeading
+        eyebrow="BOD Properties"
+        title="Subscribers"
+        description={`${filtered.length} of ${subscribers.length} • ${totalPlots} plots`}
+        actions={
+          <button type="button" onClick={loadSubscribers} className="inline-flex items-center gap-2 rounded-md border border-input bg-surface px-3 py-2 text-sm font-medium hover:bg-muted">
+            <RefreshCw className={`h-4 w-4 ${loading? "animate-spin" : ""}`} /> Refresh
+          </button>
         }
-        confirmLabel="Delete"
-        loading={deleting}
-        onConfirm={confirmDelete}
-        onCancel={() => setDeleteTarget(null)}
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <Users className="h-5 w-5 text-navy" />
-          <h1 className="text-lg font-bold text-navy">Subscribers</h1>
-          <span className="text-sm text-muted-foreground">
-            {filtered.length} of {subscribers.length}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={loadSubscribers}
-          disabled={loading}
-          className="inline-flex items-center gap-2 rounded-md border border-input bg-surface px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </button>
-      </div>
-
       <div className="panel p-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="relative lg:col-span-2">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              className="field pl-9"
-              placeholder="Search name, phone, email, referrer..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
+          <div className="relative lg:col-span-5">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input className="field pl-9" placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-
-          <select
-            className="field"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-          >
-            <option value="all">All statuses</option>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s === "registered" ? "Registered" : "Draft"}
-              </option>
-            ))}
+          <select className="field lg:col-span-2" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="all">All statuses</option>{STATUSES.map(s => <option key={s} value={s}>{toTitleCase(s)}</option>)}
           </select>
-
-          <select
-            className="field"
-            value={paymentFilter}
-            onChange={(e) => setPaymentFilter(e.target.value)}
-          >
-            <option value="all">All payment plans</option>
-            {PAYMENT_OPTIONS.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
+          <select className="field lg:col-span-2" value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)}>
+            <option value="all">All plans</option>{PAYMENT_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
-
-          <select
-            className="field lg:col-span-2"
-            value={estateFilter}
-            onChange={(e) => setEstateFilter(e.target.value)}
-          >
-            <option value="all">All estates</option>
-            {ESTATES.map((e) => (
-              <option key={e} value={e}>
-                {e}
-              </option>
-            ))}
+          <select className="field lg:col-span-3" value={estateFilter} onChange={(e) => setEstateFilter(e.target.value)}>
+            <option value="all">All estates</option>{estates.map(e => <option key={e} value={e}>{e}</option>)}
           </select>
-
-          <div className="flex items-center justify-end text-sm text-muted-foreground lg:col-span-2">
-            Total plots (filtered): <span className="ml-1 font-semibold text-navy">{totalPlots}</span>
-          </div>
         </div>
       </div>
 
-      {error && (
-        <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>Failed to load subscribers: {error}</span>
-        </div>
-      )}
+      {error && <div className="flex gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><AlertCircle className="h-4 w-4" />{error}</div>}
 
-      <div className="panel overflow-x-auto">
-        {loading ? (
-          <div className="flex items-center justify-center gap-2 p-10 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading subscribers...
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="p-10 text-center text-sm text-muted-foreground">
-            No subscribers match your filters.
-          </div>
+      <div className="panel overflow-hidden">
+        {loading? (
+          <div className="flex justify-center gap-2 p-10 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>
+        ) : filtered.length===0? (
+          <div className="p-12 text-center text-sm text-muted-foreground">No subscribers</div>
         ) : (
-          <table className="w-full min-w-[980px] text-sm">
-            <thead className="border-b border-border bg-navy-soft/40 text-left text-xs font-semibold uppercase tracking-wide text-navy">
-              <tr>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Phone</th>
-                <th className="px-4 py-3">Estate</th>
-                <th className="px-4 py-3">Plots</th>
-                <th className="px-4 py-3">Payment</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Registered</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {filtered.map((s) => (
-                <tr key={s.id} className="hover:bg-muted/50">
-                  <td className="px-4 py-3">
-                    <div className="font-medium">
-                      {s.title ? `${s.title} ` : ""}
-                      {toTitleCase(s.surname)} {toTitleCase(s.other_names)}
-                    </div>
-                    {s.email && (
-                      <div className="text-xs text-muted-foreground">{s.email}</div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">{s.phone}</td>
-                  <td className="px-4 py-3">{s.preferred_estate}</td>
-                  <td className="px-4 py-3">{s.number_of_plots}</td>
-                  <td className="px-4 py-3">{s.payment_option}</td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={s.status} />
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
-                    {new Date(s.created_at).toLocaleDateString(undefined, {
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-1">
-                      <Link
-                        href={`/subscribers/${s.id}`}
-                        title="View"
-                        className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-navy"
-                      >
-                        <Eye className="h-4 w-4" />
-                      </Link>
-                      <Link
-                        href={`/subscribers/${s.id}/edit`}
-                        title="Edit"
-                        className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-navy"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Link>
-                      <button
-                        type="button"
-                        title="Delete"
-                        onClick={() => setDeleteTarget(s)}
-                        className="rounded-md p-1.5 text-muted-foreground hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+          <>
+            <div className="hidden lg:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/50 text-left text- uppercase tracking-widest text-muted-foreground"><tr><th className="px-4 py-3">Name</th><th className="px-4 py-3">Phone</th><th className="px-4 py-3">Estate</th><th className="px-4 py-3">Plots</th><th className="px-4 py-3">Payment</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Date</th><th className="px-4 py-3 text-right">Actions</th></tr></thead>
+                <tbody className="divide-y">
+                  {paginated.map(s => (
+                    <tr key={s.id} className="hover:bg-muted/40">
+                      <td className="px-4 py-3 font-medium text-navy">{s.surname} {s.other_names}</td>
+                      <td className="px-4 py-3">{s.phone}</td>
+                      <td className="px-4 py-3 max-w- truncate">{s.preferred_estate}</td>
+                      <td className="px-4 py-3">{s.number_of_plots}</td>
+                      <td className="px-4 py-3">{s.payment_option}</td>
+                      <td className="px-4 py-3"><StatusBadge status={s.status} /></td>
+                      <td className="px-4 py-3 text-muted-foreground" suppressHydrationWarning>{formatDate(s.created_at)}</td>
+                      <td className="px-4 py-3"><div className="flex justify-end gap-1"><Link href={`/subscribers/${s.id}`} className="rounded p-1.5 hover:bg-muted"><Eye className="h-4 w-4" /></Link><Link href={`/subscribers/${s.id}/edit`} className="rounded p-1.5 hover:bg-muted"><Pencil className="h-4 w-4" /></Link><button onClick={() => setDeleteTarget(s)} className="rounded p-1.5 hover:bg-red-50 text-red-600"><Trash2 className="h-4 w-4" /></button></div></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="divide-y lg:hidden">
+              {paginated.map(s => (
+                <div key={s.id} className="p-4">
+                  <div className="font-medium text-navy">{s.surname} {s.other_names}</div>
+                  <div className="text-xs text-muted-foreground">{s.phone} • {s.preferred_estate}</div>
+                  <div className="mt-2 flex gap-2"><StatusBadge status={s.status} /><span className="text-xs">{s.number_of_plots} plots</span></div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+            {totalPages>1 && <div className="flex justify-between border-t px-4 py-3 text-sm"><span>Page {page} of {totalPages}</span><div className="flex gap-2"><button disabled={page===1} onClick={() => setPage(p=>p-1)} className="rounded border px-3 py-1 disabled:opacity-50">Prev</button><button disabled={page===totalPages} onClick={() => setPage(p=>p+1)} className="rounded border px-3 py-1 disabled:opacity-50">Next</button></div></div>}
+          </>
         )}
       </div>
     </div>

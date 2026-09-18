@@ -5,8 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2 } from "lucide-react";
 
-export const dynamic = "force-dynamic";
-
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -18,26 +16,38 @@ function LoginForm() {
   const redirectedFrom = searchParams.get("redirectedFrom");
   const unauthorized = searchParams.get("error") === "unauthorized";
 
+  // prevent open redirect vulnerability - only allow internal paths
+  const getSafeRedirect = (path: string | null) => {
+    if (!path) return "/";
+    if (!path.startsWith("/") || path.startsWith("//")) return "/";
+    return path;
+  };
+
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    const supabase = createClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const supabase = createClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
 
-    setLoading(false);
+      if (signInError) {
+        setError(signInError.message);
+        return;
+      }
 
-    if (signInError) {
-      setError(signInError.message);
-      return;
+      // This maintains your server context / middleware session
+      router.replace(getSafeRedirect(redirectedFrom));
+      router.refresh();
+    } catch (err: any) {
+      setError(err?.message || "Something went wrong");
+    } finally {
+      setLoading(false);
     }
-
-    router.replace(redirectedFrom || "/");
-    router.refresh();
   }
 
   return (
@@ -110,9 +120,9 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
-      <Suspense fallback={null}>
+      <Suspense fallback={<div className="h-96 w-full max-w-sm animate-pulse rounded-lg bg-muted" />}>
         <LoginForm />
       </Suspense>
     </div>
   );
-}
+} 

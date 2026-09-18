@@ -1,19 +1,23 @@
-import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 
-// Admin client for privileged operations (e.g. creating users, bypassing RLS).
-// Uses the service role key — NEVER expose this client or its key to the browser.
-// Only import this file from server-only code (Server Actions, Route Handlers, etc.).
 export function createAdminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (!url || !serviceRoleKey) {
+  if (!url || !serviceRoleKey || !anonKey) {
+    console.error("❌ MISSING ENV VARS:", {
+      NEXT_PUBLIC_SUPABASE_URL: !!url,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: !!anonKey,
+      SUPABASE_SERVICE_ROLE_KEY: !!serviceRoleKey,
+      cwd: process.cwd(),
+    });
     throw new Error(
-      "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variable."
+      `Missing env vars in .env.local - URL:${!!url} ANON:${!!anonKey} SERVICE:${!!serviceRoleKey}. Make sure .env.local is in project root next to package.json and restart server.`
     );
   }
 
-  return createSupabaseClient(url, serviceRoleKey, {
+  return createClient(url, serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,

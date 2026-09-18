@@ -9,11 +9,9 @@ export type Profile = {
   email: string;
   role: UserRole;
   branch: string | null;
+  is_active?: boolean; // we added this column
 };
 
-// Returns the logged-in user's profile (with role), or null if not logged in.
-// proxy.ts already redirects unauthenticated requests to /login, so null
-// here mainly matters for pages that are reachable without a session.
 export async function getProfile(): Promise<Profile | null> {
   const supabase = await createClient();
   const {
@@ -24,7 +22,7 @@ export async function getProfile(): Promise<Profile | null> {
 
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, full_name, email, role, branch')
+    .select('id, full_name, email, role, branch, is_active')
     .eq('id', user.id)
     .single();
 
@@ -32,8 +30,6 @@ export async function getProfile(): Promise<Profile | null> {
   return data as Profile;
 }
 
-// Call at the top of a Server Component page to restrict it to certain roles.
-// Redirects to / with an error flag if the user's role isn't allowed.
 export async function requireRole(allowed: UserRole[]): Promise<Profile> {
   const profile = await getProfile();
 
@@ -41,9 +37,18 @@ export async function requireRole(allowed: UserRole[]): Promise<Profile> {
     redirect('/login');
   }
 
+  if (profile.is_active === false) {
+    redirect('/login?error=deactivated');
+  }
+
   if (!allowed.includes(profile.role)) {
     redirect('/?error=unauthorized');
   }
 
   return profile;
+}
+
+// helper for admin-only
+export async function requireAdmin() {
+  return requireRole(['Admin']);
 }
