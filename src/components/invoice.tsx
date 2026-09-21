@@ -56,11 +56,102 @@ function InfoCell({ label, value }: { label: string; value: string }) {
 export function Invoice({ data }: { data: InvoiceData }) {
   const printRef = useRef<HTMLDivElement>(null);
 
-  const subtotal = data.lineItems.reduce((sum, li) => sum + li.amount, 0);
-  const total = subtotal - data.salesDiscount;
+  // Coerce every numeric input with Number(): line item amounts, unit
+  // prices, and the sales discount are all backed by Postgres `numeric`
+  // columns, which Supabase frequently returns as strings rather than
+  // JS numbers. `reduce`'s `+` operator does STRING CONCATENATION when
+  // either side is a string (unlike `-`, which always coerces to a
+  // number), so without this, subtotal — and everything computed from
+  // it, including the discounted total — can come out as a garbled
+  // concatenated string instead of a real sum.
+  const subtotal = data.lineItems.reduce((sum, li) => sum + (Number(li.amount) || 0), 0);
+  const discount = Number(data.salesDiscount) || 0;
+  const total = Math.max(subtotal - discount, 0);
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div id="invoice-print-root" className="mx-auto max-w-3xl">
+      {/*
+        Print isolation: hide everything on the page except this root
+        and what's inside it, the same way EstateReceipt does it. But
+        unlike EstateReceipt's modal — a near-direct child of body —
+        #invoice-print-root sits many levels deep inside the app shell
+        (Next.js root layout, the page wrapper, InvoiceLoader's own
+        wrapper div). A plain
+        `*:not(#invoice-print-root):not(#invoice-print-root *)` rule
+        also matches those ancestor wrapper divs, since they're
+        neither the root nor descendants of it, so it hides them too —
+        and a hidden ancestor hides everything inside it, including
+        the invoice. That produces a fully blank print/PDF output.
+
+        Fix: hide everything by default, then for any element that
+        *contains* #invoice-print-root (its ancestors), use
+        display:contents so it stays structurally present — passing
+        its child through — without rendering as a box or hiding it.
+        Only the invoice root and its own contents get their real
+        display value back.
+
+        Also force the navy background blocks (header contact bar,
+        totals footer) to actually print: browsers drop background
+        colors by default on print unless print-color-adjust is set,
+        so without this the invoice total row prints as white-on-white.
+
+        Finally, two things that push this onto a second, mostly-blank
+        page: the browser's own default print margins (often ~1in/25mm
+        on each side) eat into the usable page height before the
+        content even starts, and without break-inside guidance a grid
+        row or the totals box can split right at the page boundary,
+        dragging a sliver of itself onto page two. @page tightens the
+        margin (letting the content actually fit in one page's worth
+        of height) and break-inside: avoid keeps each block whole.
+      */}
+      <style>{`
+        @page {
+          margin: 10mm;
+        }
+        @media print {
+          body * {
+            display: none !important;
+          }
+          body *:has(#invoice-print-root) {
+            display: contents !important;
+          }
+          #invoice-print-root {
+            display: block !important;
+            margin: 0 !important;
+            max-width: none !important;
+          }
+          #invoice-print-root * {
+            display: revert !important;
+          }
+          #invoice-print-root .print\\:hidden {
+            display: none !important;
+          }
+          html, body {
+            height: auto !important;
+            overflow: visible !important;
+          }
+          #invoice-print-root * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            color-adjust: exact !important;
+          }
+          .print-modal-content {
+            box-shadow: none !important;
+            border: none !important;
+          }
+          #invoice-print-root .p-8 {
+            padding: 1.25rem !important;
+          }
+          #invoice-print-root .grid,
+          #invoice-print-root table,
+          #invoice-print-root tbody tr,
+          #invoice-print-root .rounded-md {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+        }
+      `}</style>
+
       <div className="mb-4 flex justify-end gap-2 print:hidden">
         <DownloadPdfButton targetRef={printRef as unknown as React.RefObject<HTMLElement>} filename={`invoice-${data.invoiceNumber}`} label="Download PDF" />
         <button
@@ -164,11 +255,11 @@ export function Invoice({ data }: { data: InvoiceData }) {
               <tbody className="divide-y divide-border">
                 {data.lineItems.map((li) => (
                   <tr key={li.id} className="align-top">
-                    <td className="px-3 py-3 font-medium text-navy">{li.plots}</td>
+                    <td className="px-3 py-3 font-medium text-navy">{Number(li.plots)}</td>
                     <td className="px-3 py-3 text-foreground">{li.item}</td>
                     <td className="whitespace-pre-line px-3 py-3 text-muted-foreground">{li.description}</td>
-                    <td className="px-3 py-3 text-right text-foreground">{naira.format(li.unitPrice)}</td>
-                    <td className="px-3 py-3 text-right font-semibold text-navy">{naira.format(li.amount)}</td>
+                    <td className="px-3 py-3 text-right text-foreground">{naira.format(Number(li.unitPrice) || 0)}</td>
+                    <td className="px-3 py-3 text-right font-semibold text-navy">{naira.format(Number(li.amount) || 0)}</td>
                   </tr>
                 ))}
                 {data.lineItems.length === 0 && (
@@ -189,10 +280,10 @@ export function Invoice({ data }: { data: InvoiceData }) {
                 <span className="text-muted-foreground">Subtotal</span>
                 <span className="font-medium text-foreground">{naira.format(subtotal)}</span>
               </div>
-              {data.salesDiscount > 0 && (
+              {discount > 0 && (
                 <div className="flex justify-between border-t border-border px-4 py-2 text-sm">
                   <span className="text-muted-foreground">Sales Discount</span>
-                  <span className="font-medium text-red-600">-{naira.format(data.salesDiscount)}</span>
+                  <span className="font-medium text-red-600">-{naira.format(discount)}</span>
                 </div>
               )}
               <div className="flex justify-between border-t border-border bg-navy px-4 py-3">

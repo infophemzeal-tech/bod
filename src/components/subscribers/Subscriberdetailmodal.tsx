@@ -1,14 +1,14 @@
 "use client";
 
-import { X, Phone, Briefcase, Building2, User, CreditCard, Landmark } from "lucide-react";
-
-type Payment = {
-  id: string;
-  created_at: string;
-  amount: number;
-  method: string | null;
-  reference: string | null;
-};
+import type { ElementType } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import Link from "next/link";
+import { Loader2, Search, RefreshCw, Users, AlertCircle, Eye, Pencil, Trash2, Landmark, Wallet, PiggyBank, BadgePercent } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { useToasts, ToastStack } from "@/components/toast";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { toTitleCase } from "@/lib/text";
+import { PageHeading } from "@/components/AppShell";
 
 type Subscriber = {
   id: string;
@@ -16,7 +16,8 @@ type Subscriber = {
   title: string | null;
   surname: string;
   other_names: string;
-  date_of_birth: string | null;
+  subscribed_on: string | null;
+  physical_allocation_date: string | null;
   email: string | null;
   phone: string;
   contact_address: string | null;
@@ -25,13 +26,18 @@ type Subscriber = {
   employer_name: string | null;
   payment_option: string;
   number_of_plots: number;
+  discount_amount: number;
+  amount_purchased: number | null;
+  amount_deposited: number | null;
   preferred_estate: string;
-  amount_deposited: number; 
-  total_cost: number; // The amount of the land bought
-  payments?: Payment[]; 
+  plot_preference: string[];
+  plot_preference_other: string | null;
   referrer_name: string | null;
-  status: "draft" | "registered";
+  status: "draft" | "registered" | "completed";
 };
+
+const PAYMENT_OPTIONS = ["Outright", "Quarterly", "Monthly"];
+const STATUSES = ["draft", "registered", "completed"] as const;
 
 const naira = new Intl.NumberFormat("en-NG", {
   style: "currency",
@@ -39,254 +45,293 @@ const naira = new Intl.NumberFormat("en-NG", {
   maximumFractionDigits: 0,
 });
 
-function Field({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="space-y-0.5">
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      <div className={`text-sm font-medium ${value ? "text-navy" : "text-muted-foreground/60"}`}>
-        {value || "—"}
-      </div>
-    </div>
-  );
+function useDebounced<T>(value: T, delay = 300) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
 }
 
-function SectionTitle({ icon: Icon, title }: { icon: React.ElementType; title: string }) {
-  return (
-    <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-navy">
-      <Icon className="h-4 w-4 text-muted-foreground" />
-      {title}
-    </div>
-  );
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    completed: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20",
+    registered: "bg-blue-50 text-blue-700 ring-1 ring-blue-600/20",
+    draft: "bg-amber-50 text-amber-700 ring-1 ring-amber-600/20",
+  };
+  return <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${map[status]?? "bg-muted"}`}>{toTitleCase(status)}</span>;
 }
 
-export function SubscriberDetailModal({
-  subscriber,
-  onClose,
+// Stable date - prevents hydration mismatch
+function formatDate(iso: string | null) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toISOString().slice(0, 10); // YYYY-MM-DD - same on server & client
+  } catch { return iso; }
+}
+
+function MetricCard({
+  icon: Icon,
+  label,
+  value,
+  hint,
 }: {
-  subscriber: Subscriber;
-  onClose: () => void;
+  icon: ElementType;
+  label: string;
+  value: string;
+  hint?: string;
 }) {
-  const fullName = [subscriber.title, subscriber.surname, subscriber.other_names]
-    .filter(Boolean)
-    .join(" ");
+  return (
+    <div className="panel flex items-start gap-3 p-4">
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-navy-soft text-navy">
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="min-w-0">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {label}
+        </div>
+        <div className="truncate text-lg font-bold text-navy">{value}</div>
+        {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
+      </div>
+    </div>
+  );
+}
 
-  const initials = `${subscriber.surname?.charAt(0) || ""}${
-    subscriber.other_names?.charAt(0) || ""
-  }`.toUpperCase();
+export function SubscribersPage() {
+  const [mounted, setMounted] = useState(false);
+  const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
+  const [estates, setEstates] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false); // FIX: start false, not true
+  const [error, setError] = useState<string | null>(null);
 
-  // Financial Calculations
-  const totalLandCost = subscriber.total_cost || 0;
-  const hasLandCost = totalLandCost > 0;
-  
-  // Use payments array if available, otherwise fall back to amount_deposited
-  const totalPaid = subscriber.payments && subscriber.payments.length > 0
-    ? subscriber.payments.reduce((sum, p) => sum + p.amount, 0)
-    : subscriber.amount_deposited || 0;
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounced(search, 300);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [estateFilter, setEstateFilter] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
 
-  const balance = totalLandCost - totalPaid;
-  const isFullyPaid = hasLandCost && balance <= 0;
+  const [deleteTarget, setDeleteTarget] = useState<Subscriber | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { toasts, pushToast, dismissToast } = useToasts();
+
+  useEffect(() => { setMounted(true); }, []);
+
+  const loadSubscribers = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const supabase = createClient();
+    const [{ data, error: subError }, { data: estateData }] = await Promise.all([
+      supabase.from("subscribers").select("*").order("created_at", { ascending: false }),
+      supabase.from("estates").select("name").order("name"),
+    ]);
+    if (subError) setError(subError.message);
+    else {
+      setSubscribers((data as Subscriber[])?? []);
+      if (estateData) setEstates(estateData.map((e) => e.name));
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { if (mounted) loadSubscribers(); }, [mounted, loadSubscribers]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, estateFilter, paymentFilter]);
+
+  const filtered = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    return subscribers.filter((s) => {
+      if (statusFilter!== "all" && s.status!== statusFilter) return false;
+      if (estateFilter!== "all" && s.preferred_estate!== estateFilter) return false;
+      if (paymentFilter!== "all" && s.payment_option!== paymentFilter) return false;
+      if (q) {
+        const haystack = [s.surname, s.other_names, s.phone, s.email?? "", s.preferred_estate].join(" ").toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [subscribers, debouncedSearch, statusFilter, estateFilter, paymentFilter]);
+
+  const paginated = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE) || 1;
+  // Coerce with Number(): Postgres numeric columns (number_of_plots is
+  // numeric(10,1) to support half-plots) are often returned as strings
+  // by the client, so `sum + s.number_of_plots` would silently do
+  // string concatenation instead of addition without this.
+  const totalPlots = useMemo(
+    () => filtered.reduce((sum, s) => sum + (Number(s.number_of_plots) || 0), 0),
+    [filtered]
+  );
+
+  // Metrics for the totals bar. Note: totalCollected only reflects each
+  // subscriber's initial deposit (amount_deposited) captured at
+  // registration — later installment payments live in a separate
+  // payments table that isn't joined into this list query, so
+  // "Outstanding" here is an upper-bound estimate, not the live balance.
+  const metrics = useMemo(() => {
+    let totalLandValue = 0;
+    let totalDiscount = 0;
+    let totalCollected = 0;
+    let registeredCount = 0;
+    let draftCount = 0;
+    for (const s of filtered) {
+      totalLandValue += Number(s.amount_purchased) || 0;
+      totalDiscount += Number(s.discount_amount) || 0;
+      totalCollected += Number(s.amount_deposited) || 0;
+      if (s.status === "registered" || s.status === "completed") registeredCount += 1;
+      if (s.status === "draft") draftCount += 1;
+    }
+    return {
+      totalLandValue,
+      totalDiscount,
+      totalCollected,
+      outstanding: Math.max(totalLandValue - totalCollected, 0),
+      registeredCount,
+      draftCount,
+    };
+  }, [filtered]);
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    const supabase = createClient();
+    const { error: rpcErr } = await supabase.rpc("delete_subscriber_and_restore_plot", { p_subscriber_id: deleteTarget.id });
+    if (rpcErr) {
+      const { error } = await supabase.from("subscribers").delete().eq("id", deleteTarget.id);
+      if (error) { setDeleting(false); pushToast("error", error.message); return; }
+    }
+    setDeleting(false);
+    setSubscribers((prev) => prev.filter((s) => s.id!== deleteTarget.id));
+    pushToast("ok", `${deleteTarget.surname} deleted.`);
+    setDeleteTarget(null);
+  }
+
+  if (!mounted) return null; // Prevent hydration mismatch completely
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-      <div className="panel flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden shadow-2xl">
-        
-        {/* Header Section */}
-        <div className="flex items-start justify-between border-b border-border bg-navy-soft/40 px-6 py-4">
-          <div className="flex items-center gap-4">
-            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-navy text-base font-bold text-primary-foreground">
-              {initials || <User className="h-6 w-6" />}
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-navy">{fullName}</h2>
-              <p className="text-xs text-muted-foreground">
-                Added on{" "}
-                {new Date(subscriber.created_at).toLocaleDateString(undefined, {
-                  year: "numeric",
-                  month: "short",
-                  day: "numeric",
-                })}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <X className="h-5 w-5" />
+    <div className="space-y-5">
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
+      <ConfirmDialog open={!!deleteTarget} title="Delete subscriber?" description={deleteTarget? `Remove ${deleteTarget.surname} ${deleteTarget.other_names} and restore ${deleteTarget.number_of_plots} plot(s)?` : ""} confirmLabel="Delete" loading={deleting} onConfirm={confirmDelete} onCancel={() => setDeleteTarget(null)} />
+
+      <PageHeading
+        eyebrow="BOD Properties"
+        title="Subscribers"
+        description={`${filtered.length} of ${subscribers.length} • ${totalPlots} plots`}
+        actions={
+          <button type="button" onClick={loadSubscribers} className="inline-flex items-center gap-2 rounded-md border border-input bg-surface px-3 py-2 text-sm font-medium hover:bg-muted">
+            <RefreshCw className={`h-4 w-4 ${loading? "animate-spin" : ""}`} /> Refresh
           </button>
+        }
+      />
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <MetricCard
+          icon={Users}
+          label="Subscribers"
+          value={String(filtered.length)}
+          hint={`${metrics.registeredCount} registered • ${metrics.draftCount} draft`}
+        />
+        <MetricCard
+          icon={Landmark}
+          label="Total Land Value"
+          value={naira.format(metrics.totalLandValue)}
+          hint={`${totalPlots} plot(s)`}
+        />
+        <MetricCard
+          icon={Wallet}
+          label="Total Collected"
+          value={naira.format(metrics.totalCollected)}
+          hint="Initial deposits only"
+        />
+        <MetricCard
+          icon={PiggyBank}
+          label="Outstanding"
+          value={naira.format(metrics.outstanding)}
+          hint="Excludes later installments"
+        />
+        <MetricCard
+          icon={BadgePercent}
+          label="Total Discount Given"
+          value={naira.format(metrics.totalDiscount)}
+        />
+      </div>
+
+      <div className="panel p-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
+          <div className="relative lg:col-span-5">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input className="field pl-9" placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <select className="field lg:col-span-2" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="all">All statuses</option>{STATUSES.map(s => <option key={s} value={s}>{toTitleCase(s)}</option>)}
+          </select>
+          <select className="field lg:col-span-2" value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)}>
+            <option value="all">All plans</option>{PAYMENT_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <select className="field lg:col-span-3" value={estateFilter} onChange={(e) => setEstateFilter(e.target.value)}>
+            <option value="all">All estates</option>{estates.map(e => <option key={e} value={e}>{e}</option>)}
+          </select>
         </div>
+      </div>
 
-        {/* Scrollable Content Section */}
-        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
-          
-          {/* Contact & Personal Info */}
-          <div className="space-y-4">
-            <SectionTitle icon={Phone} title="Contact & Personal Info" />
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="Phone" value={subscriber.phone} />
-              <Field label="Email" value={subscriber.email} />
-              <Field
-                label="Date of Birth"
-                value={
-                  subscriber.date_of_birth
-                    ? new Date(subscriber.date_of_birth).toLocaleDateString()
-                    : null
-                }
-              />
-              <div className="sm:col-span-2 lg:col-span-3">
-                <Field label="Contact Address" value={subscriber.contact_address} />
-              </div>
-              <Field label="Referrer Name" value={subscriber.referrer_name} />
-            </div>
-          </div>
+      {error && <div className="flex gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><AlertCircle className="h-4 w-4" />{error}</div>}
 
-          <div className="border-t border-border" />
-
-          {/* Work Info */}
-          <div className="space-y-4">
-            <SectionTitle icon={Briefcase} title="Employment History" />
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="Profession" value={subscriber.profession} />
-              <Field label="Occupation" value={subscriber.occupation} />
-              <Field label="Employer Name" value={subscriber.employer_name} />
-            </div>
-          </div>
-
-          <div className="border-t border-border" />
-
-          {/* Plot & Subscription Info */}
-          <div className="space-y-4">
-            <SectionTitle icon={Building2} title="Plot & Subscription" />
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="Preferred Estate" value={subscriber.preferred_estate} />
-              <Field label="Number of Plots" value={subscriber.number_of_plots} />
-              <Field label="Payment Option" value={subscriber.payment_option} />
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Status
-                </div>
-                {subscriber.status === "registered" ? (
-                  <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                    Registered
-                  </span>
-                ) : (
-                  <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                    Draft
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="border-t border-border" />
-
-          {/* Payment Details & Running Balance */}
-          <div className="space-y-4">
-            <SectionTitle icon={CreditCard} title="Payment & Financial Summary" />
-            
-            {/* Large Prominent Total Cost */}
-            <div className="rounded-lg border border-navy-soft bg-navy-soft/40 p-4">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Amount of Land Bought (Total Cost)
-              </div>
-              <div className="mt-1 text-2xl font-bold text-navy">
-                {hasLandCost ? naira.format(totalLandCost) : "Not set"}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {/* Total Paid */}
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">
-                  Total Paid So Far
-                </div>
-                <div className="mt-1 text-xl font-bold text-emerald-700">
-                  {naira.format(totalPaid)}
-                </div>
-              </div>
-
-              {/* Running Balance */}
-              <div className={`rounded-lg border p-4 ${
-                isFullyPaid 
-                  ? "border-emerald-200 bg-emerald-50" 
-                  : "border-red-200 bg-red-50"
-              }`}>
-                <div className={`text-[11px] font-semibold uppercase tracking-wider ${
-                  isFullyPaid ? "text-emerald-700" : "text-red-700"
-                }`}>
-                  {isFullyPaid ? "Fully Paid" : "Outstanding Balance"}
-                </div>
-                <div className={`mt-1 text-xl font-bold ${
-                  isFullyPaid ? "text-emerald-700" : "text-red-700"
-                }`}>
-                  {!hasLandCost ? "—" : isFullyPaid ? "₦0" : naira.format(Math.abs(balance))}
-                </div>
-              </div>
-            </div>
-
-            {/* Payment History Table */}
-            {subscriber.payments && subscriber.payments.length > 0 ? (
-              <div className="mt-4 overflow-hidden rounded-lg border border-border">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-muted/50 text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <tr>
-                      <th className="px-4 py-2 font-semibold">Date</th>
-                      <th className="px-4 py-2 font-semibold">Method</th>
-                      <th className="px-4 py-2 font-semibold">Reference</th>
-                      <th className="px-4 py-2 text-right font-semibold">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border bg-surface">
-                    {subscriber.payments.map((p) => (
-                      <tr key={p.id} className="hover:bg-muted/30">
-                        <td className="px-4 py-2.5 text-navy">
-                          {new Date(p.created_at).toLocaleDateString(undefined, {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                          })}
-                        </td>
-                        <td className="px-4 py-2.5 text-muted-foreground">
-                          <span className="inline-flex items-center gap-1.5">
-                            <Landmark className="h-3.5 w-3.5" />
-                            {p.method || "—"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-muted-foreground">
-                          {p.reference || "—"}
-                        </td>
-                        <td className="px-4 py-2.5 text-right font-semibold text-emerald-700">
-                          {naira.format(p.amount)}
-                        </td>
+      <div className="panel overflow-hidden">
+        {loading? (
+          <div className="flex justify-center gap-2 p-10 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>
+        ) : filtered.length===0? (
+          <div className="p-12 text-center text-sm text-muted-foreground">No subscribers</div>
+        ) : (
+          <>
+            <div className="hidden lg:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/50 text-left text-xs uppercase tracking-widest text-muted-foreground"><tr><th className="px-4 py-3">Name</th><th className="px-4 py-3">Phone</th><th className="px-4 py-3">Estate</th><th className="px-4 py-3">Plots</th><th className="px-4 py-3">Discount</th><th className="px-4 py-3">Payment</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Subscribed On</th><th className="px-4 py-3">Allocation Date</th><th className="px-4 py-3 text-right">Actions</th></tr></thead>
+                <tbody className="divide-y">
+                  {paginated.map(s => {
+                    const plots = Number(s.number_of_plots) || 0;
+                    const discount = Number(s.discount_amount) || 0;
+                    return (
+                      <tr key={s.id} className="hover:bg-muted/40">
+                        <td className="px-4 py-3 font-medium text-navy">{s.surname} {s.other_names}</td>
+                        <td className="px-4 py-3">{s.phone}</td>
+                        <td className="px-4 py-3 max-w-[160px] truncate">{s.preferred_estate}</td>
+                        <td className="px-4 py-3">{plots}</td>
+                        <td className="px-4 py-3">{discount > 0 ? naira.format(discount) : "—"}</td>
+                        <td className="px-4 py-3">{s.payment_option}</td>
+                        <td className="px-4 py-3"><StatusBadge status={s.status} /></td>
+                        <td className="px-4 py-3 text-muted-foreground" suppressHydrationWarning>{formatDate(s.subscribed_on)}</td>
+                        <td className="px-4 py-3 text-muted-foreground" suppressHydrationWarning>{formatDate(s.physical_allocation_date)}</td>
+                        <td className="px-4 py-3"><div className="flex justify-end gap-1"><Link href={`/subscribers/${s.id}`} className="rounded p-1.5 hover:bg-muted"><Eye className="h-4 w-4" /></Link><Link href={`/subscribers/${s.id}/edit`} className="rounded p-1.5 hover:bg-muted"><Pencil className="h-4 w-4" /></Link><button onClick={() => setDeleteTarget(s)} className="rounded p-1.5 hover:bg-red-50 text-red-600"><Trash2 className="h-4 w-4" /></button></div></td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="mt-4 rounded-md border border-dashed border-border bg-muted/20 p-4 text-center text-xs text-muted-foreground">
-                {totalPaid > 0 
-                  ? "Initial deposit recorded. No subsequent itemized payments found." 
-                  : "No payments recorded yet."}
-              </div>
-            )}
-          </div>
-
-        </div>
-
-        {/* Footer Section */}
-        <div className="flex items-center justify-end border-t border-border bg-muted/30 px-6 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-input bg-surface px-4 py-2 text-sm font-semibold text-navy transition-colors hover:bg-muted"
-          >
-            Close
-          </button>
-        </div>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="divide-y lg:hidden">
+              {paginated.map(s => {
+                const plots = Number(s.number_of_plots) || 0;
+                const discount = Number(s.discount_amount) || 0;
+                return (
+                  <div key={s.id} className="p-4">
+                    <div className="font-medium text-navy">{s.surname} {s.other_names}</div>
+                    <div className="text-xs text-muted-foreground">{s.phone} • {s.preferred_estate}</div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <StatusBadge status={s.status} />
+                      <span className="text-xs">{plots} plot(s)</span>
+                      {discount > 0 && <span className="text-xs text-emerald-700">-{naira.format(discount)} discount</span>}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span suppressHydrationWarning>Subscribed: {formatDate(s.subscribed_on)}</span>
+                      <span suppressHydrationWarning>Allocated: {formatDate(s.physical_allocation_date)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {totalPages>1 && <div className="flex justify-between border-t px-4 py-3 text-sm"><span>Page {page} of {totalPages}</span><div className="flex gap-2"><button disabled={page===1} onClick={() => setPage(p=>p-1)} className="rounded border px-3 py-1 disabled:opacity-50">Prev</button><button disabled={page===totalPages} onClick={() => setPage(p=>p+1)} className="rounded border px-3 py-1 disabled:opacity-50">Next</button></div></div>}
+          </>
+        )}
       </div>
     </div>
   );

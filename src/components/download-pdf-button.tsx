@@ -21,8 +21,16 @@ export function DownloadPdfButton({
     setGenerating(true);
 
     try {
+      // html2canvas-pro is a maintained, drop-in-compatible fork of
+      // html2canvas. The original html2canvas package's color parser
+      // predates modern CSS color functions (oklch(), lab(),
+      // color-mix()) and throws `Attempting to parse an unsupported
+      // color function "..."` the moment it hits a computed style using
+      // one — which Tailwind CSS v4's default palette uses everywhere.
+      // -pro adds support for those while keeping the same API, so the
+      // rest of this file is unchanged.
       const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-        import("html2canvas"),
+        import("html2canvas-pro"),
         import("jspdf"),
       ]);
 

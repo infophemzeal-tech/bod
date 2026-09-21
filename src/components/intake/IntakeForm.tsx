@@ -7,12 +7,14 @@ import { useToasts, ToastStack } from "@/components/toast";
 import { toTitleCase } from "@/lib/text";
 
 const TITLES = ["Mr", "Mrs", "Miss", "Dr", "Engr", "Chief", "Alhaji", "Hajia"];
-const ESTATES = [
-  "B-Top Garden, Shimawa",
-  "Royal Heritage Estate, Mowe",
-  "Diamond Court, Sangotedo",
-  "Emerald Vale Estate, Simawa",
-];
+
+type Estate = {
+  id: string;
+  name: string;
+  location: string;
+  available_plots: number;
+};
+
 const PAYMENT_OPTIONS = [
   { value: "Outright", hint: "One-time payment" },
   { value: "Quarterly", hint: "4 payments / year" },
@@ -22,11 +24,16 @@ const PLOT_PREFERENCES = ["Commercial", "Residential", "Corner Piece", "Other"];
 
 const STORAGE_KEY = "bod_intake_form_draft";
 
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 type FormState = {
   title: string;
   surname: string;
   otherNames: string;
-  dateOfBirth: string;
+  subscribedOn: string;
+  physicalAllocationDate: string;
   email: string;
   phone: string;
   contactAddress: string;
@@ -37,7 +44,7 @@ type FormState = {
   employerAddress: string;
   paymentOption: string;
   numberOfPlots: string;
-  preferredEstate: string;
+  estateId: string;
   plotPreference: string[];
   plotPreferenceOther: string;
   referrerName: string;
@@ -53,7 +60,8 @@ const INITIAL_STATE: FormState = {
   title: "Mr",
   surname: "",
   otherNames: "",
-  dateOfBirth: "",
+  subscribedOn: todayISO(),
+  physicalAllocationDate: "",
   email: "",
   phone: "",
   contactAddress: "",
@@ -64,7 +72,7 @@ const INITIAL_STATE: FormState = {
   employerAddress: "",
   paymentOption: "Monthly",
   numberOfPlots: "0.5",
-  preferredEstate: ESTATES[0],
+  estateId: "",
   plotPreference: ["Residential"],
   plotPreferenceOther: "",
   referrerName: "",
@@ -125,7 +133,42 @@ function Field({
 export function IntakeForm() {
   const [form, setForm] = useState<FormState>(INITIAL_STATE);
   const [submitting, setSubmitting] = useState(false);
+  const [estates, setEstates] = useState<Estate[]>([]);
+  const [loadingEstates, setLoadingEstates] = useState(true);
   const { toasts, pushToast, dismissToast } = useToasts();
+
+  // Pull the estate list from the "Register Estate" data instead of a
+  // hardcoded array, so new estates show up here automatically.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("estates")
+        .select("id,name,location,available_plots")
+        .order("name", { ascending: true });
+      if (!active) return;
+      if (error) {
+        pushToast("error", `Failed to load estates: ${error.message}`);
+      } else {
+        setEstates((data as Estate[]) ?? []);
+      }
+      setLoadingEstates(false);
+    })();
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Default to the first estate once the list arrives, unless a draft
+  // already had one selected.
+  useEffect(() => {
+    if (estates.length > 0 && !form.estateId) {
+      set("estateId", estates[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estates]);
 
   useEffect(() => {
     try {
@@ -177,6 +220,12 @@ export function IntakeForm() {
       return;
     }
 
+    const selectedEstate = estates.find((e) => e.id === form.estateId) ?? null;
+    if (status === "registered" && !selectedEstate) {
+      pushToast("error", "Please select a preferred estate.");
+      return;
+    }
+
     const discountAmount = form.discount.trim() === "" ? 0 : Number(form.discount);
     if (!Number.isFinite(discountAmount) || discountAmount < 0) {
       pushToast("error", "Discount must be a valid number.");
@@ -190,7 +239,8 @@ export function IntakeForm() {
       title: form.title,
       surname: toTitleCase(form.surname),
       other_names: toTitleCase(form.otherNames),
-      date_of_birth: form.dateOfBirth || null,
+      subscribed_on: form.subscribedOn || null,
+      physical_allocation_date: form.physicalAllocationDate || null,
       email: form.email || null,
       phone: form.phone,
       contact_address: toTitleCase(form.contactAddress) || null,
@@ -201,7 +251,8 @@ export function IntakeForm() {
       employer_address: toTitleCase(form.employerAddress) || null,
       payment_option: form.paymentOption,
       number_of_plots: Number(form.numberOfPlots),
-      preferred_estate: form.preferredEstate,
+      preferred_estate: selectedEstate ? toTitleCase(selectedEstate.name) : null,
+      estate_id: selectedEstate?.id ?? null,
       plot_preference: form.plotPreference,
       plot_preference_other: toTitleCase(form.plotPreferenceOther) || null,
       referrer_name: toTitleCase(form.referrerName) || null,
@@ -210,7 +261,7 @@ export function IntakeForm() {
       referrer_address: toTitleCase(form.referrerAddress) || null,
       customer_id: form.customerId.trim() || null,
       sales_rep_name: toTitleCase(form.salesRepName) || null,
-      discount: discountAmount,
+      discount_amount: discountAmount,
       status,
     });
 
@@ -258,8 +309,11 @@ export function IntakeForm() {
             <Field label="Other Name(s)">
               <input className="field" placeholder="Chinedu Emmanuel" value={form.otherNames} onChange={(e) => set("otherNames", e.target.value)} required />
             </Field>
-            <Field label="Date of Birth">
-              <input className="field" type="date" value={form.dateOfBirth} onChange={(e) => set("dateOfBirth", e.target.value)} />
+            <Field label="Subscribed On">
+              <input className="field" type="date" value={form.subscribedOn ?? ""} onChange={(e) => set("subscribedOn", e.target.value)} />
+            </Field>
+            <Field label="Physical Allocation Date">
+              <input className="field" type="date" value={form.physicalAllocationDate ?? ""} onChange={(e) => set("physicalAllocationDate", e.target.value)} />
             </Field>
             <Field label="Email Address">
               <input className="field" type="email" placeholder="chinedu.okafor@gmail.com" value={form.email} onChange={(e) => set("email", e.target.value)} />
@@ -314,11 +368,35 @@ export function IntakeForm() {
                   <input className="field" type="number" step="0.5" min="0.5" value={form.numberOfPlots} onChange={(e) => set("numberOfPlots", e.target.value)} />
                 </Field>
                 <Field label="Preferred Estate">
-                  <select className="field" value={form.preferredEstate} onChange={(e) => set("preferredEstate", e.target.value)}>
-                    {ESTATES.map((estate) => (
-                      <option key={estate}>{estate}</option>
-                    ))}
+                  <select
+                    className="field"
+                    value={form.estateId}
+                    onChange={(e) => set("estateId", e.target.value)}
+                    disabled={loadingEstates || estates.length === 0}
+                  >
+                    {loadingEstates ? (
+                      <option value="">Loading estates…</option>
+                    ) : estates.length === 0 ? (
+                      <option value="">No estates registered yet</option>
+                    ) : (
+                      <>
+                        <option value="">Select an estate…</option>
+                        {estates.map((estate) => (
+                          <option key={estate.id} value={estate.id}>
+                            {toTitleCase(estate.name)}, {toTitleCase(estate.location)}
+                            {typeof estate.available_plots === "number"
+                              ? ` (${estate.available_plots} available)`
+                              : ""}
+                          </option>
+                        ))}
+                      </>
+                    )}
                   </select>
+                  {!loadingEstates && estates.length === 0 && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      No estates yet — register one from the Estates page first.
+                    </p>
+                  )}
                 </Field>
               </div>
             </div>

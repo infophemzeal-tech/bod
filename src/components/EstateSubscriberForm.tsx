@@ -20,7 +20,8 @@ type FormState = {
   title: string;
   surname: string;
   other_names: string;
-  date_of_birth: string;
+  subscribed_on: string;
+  physical_allocation_date: string;
   email: string;
   phone: string;
   contact_address: string;
@@ -29,15 +30,21 @@ type FormState = {
   employer_name: string;
   payment_option: string;
   number_of_plots: string;
+  discount_amount: string;
   amount_deposited: string;
   referrer_name: string;
 };
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 const EMPTY_FORM: FormState = {
   title: "",
   surname: "",
   other_names: "",
-  date_of_birth: "",
+  subscribed_on: todayISO(),
+  physical_allocation_date: "",
   email: "",
   phone: "",
   contact_address: "",
@@ -46,6 +53,7 @@ const EMPTY_FORM: FormState = {
   employer_name: "",
   payment_option: "Outright",
   number_of_plots: "1",
+  discount_amount: "0",
   amount_deposited: "",
   referrer_name: "",
 };
@@ -75,7 +83,9 @@ export function EstateSubscriberForm({
   }
 
   const plotsRequested = Number(form.number_of_plots) || 0;
-  const totalDue = plotsRequested * estate.price_per_plot;
+  const subtotal = plotsRequested * estate.price_per_plot;
+  const discountAmount = Number(form.discount_amount) || 0;
+  const totalDue = Math.max(subtotal - discountAmount, 0);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -85,12 +95,25 @@ export function EstateSubscriberForm({
       setError("Surname, other names, and phone are required.");
       return;
     }
-    if (!Number.isFinite(plotsRequested) || plotsRequested < 1) {
-      setError("Number of plots must be at least 1.");
+    // Plots must be at least 0.5, and only in half-plot increments (0.5, 1, 1.5, 2, ...)
+    if (
+      !Number.isFinite(plotsRequested) ||
+      plotsRequested < 0.5 ||
+      (plotsRequested * 2) % 1 !== 0
+    ) {
+      setError("Number of plots must be at least 0.5, in half-plot increments.");
       return;
     }
     if (plotsRequested > estate.available_plots) {
       setError(`Only ${estate.available_plots} plot(s) available in ${estate.name}.`);
+      return;
+    }
+    if (!Number.isFinite(discountAmount) || discountAmount < 0) {
+      setError("Discount must be a valid non-negative number.");
+      return;
+    }
+    if (discountAmount > subtotal) {
+      setError("Discount cannot exceed the subtotal.");
       return;
     }
     const deposited = form.amount_deposited.trim() === "" ? 0 : Number(form.amount_deposited);
@@ -108,7 +131,8 @@ export function EstateSubscriberForm({
     title: form.title || null,
     surname: form.surname.trim(),
     other_names: form.other_names.trim(),
-    date_of_birth: form.date_of_birth || null,
+    subscribed_on: form.subscribed_on || null,
+    physical_allocation_date: form.physical_allocation_date || null,
     email: form.email.trim() || null,
     phone: form.phone.trim(),
     contact_address: form.contact_address.trim() || null,
@@ -120,7 +144,8 @@ export function EstateSubscriberForm({
     preferred_estate: estate.name,
     estate_id: estate.id,
     amount_deposited: deposited,
-    amount_purchased: totalDue, // ← total price of the land purchased (plots × price_per_plot)
+    discount_amount: discountAmount,
+    amount_purchased: totalDue, // ← net total after discount (plots × price_per_plot − discount)
     referrer_name: form.referrer_name.trim() || null,
     status: "registered",
   })
@@ -174,6 +199,8 @@ export function EstateSubscriberForm({
       customerId: insertData.id.slice(0, 8).toUpperCase(),
       itemInvoice: insertData.id.slice(0, 8),
       description: `Payment for ${plotsRequested} plot(s) of land @ ${estate.name}, ${estate.location}`,
+      subtotal,
+      discountAmount,
       amountPaid: deposited,
       paymentMethod: form.payment_option,
       currentBalance: Math.max(totalDue - deposited, 0),
@@ -257,13 +284,24 @@ export function EstateSubscriberForm({
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
-                  Date of Birth
+                  Subscribed On
                 </label>
                 <input
                   type="date"
                   className="field"
-                  value={form.date_of_birth}
-                  onChange={(e) => update("date_of_birth", e.target.value)}
+                  value={form.subscribed_on ?? ""}
+                  onChange={(e) => update("subscribed_on", e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
+                  Physical Allocation Date
+                </label>
+                <input
+                  type="date"
+                  className="field"
+                  value={form.physical_allocation_date ?? ""}
+                  onChange={(e) => update("physical_allocation_date", e.target.value)}
                 />
               </div>
               <div>
@@ -289,17 +327,6 @@ export function EstateSubscriberForm({
                   onChange={(e) => update("email", e.target.value)}
                 />
               </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
-                  Referrer (Optional)
-                </label>
-                <input
-                  className="field"
-                  placeholder="Mrs. Jane Smith"
-                  value={form.referrer_name}
-                  onChange={(e) => update("referrer_name", e.target.value)}
-                />
-              </div>
             </div>
 
             <div>
@@ -314,7 +341,7 @@ export function EstateSubscriberForm({
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
               <div>
                 <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
                   Profession
@@ -348,6 +375,17 @@ export function EstateSubscriberForm({
                   onChange={(e) => update("employer_name", e.target.value)}
                 />
               </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
+                  Referrer (Optional)
+                </label>
+                <input
+                  className="field"
+                  placeholder="Mrs. Jane Smith"
+                  value={form.referrer_name}
+                  onChange={(e) => update("referrer_name", e.target.value)}
+                />
+              </div>
             </div>
           </div>
 
@@ -365,7 +403,8 @@ export function EstateSubscriberForm({
                 </label>
                 <input
                   type="number"
-                  min={1}
+                  min={0.5}
+                  step={0.5}
                   max={estate.available_plots}
                   className="field"
                   value={form.number_of_plots}
@@ -390,6 +429,23 @@ export function EstateSubscriberForm({
               </div>
               <div>
                 <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
+                  Discount (₦)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={subtotal || undefined}
+                  className="field"
+                  placeholder="0"
+                  value={form.discount_amount}
+                  onChange={(e) => update("discount_amount", e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
                   Amount Deposited (₦)
                 </label>
                 <input
@@ -401,15 +457,24 @@ export function EstateSubscriberForm({
                   onChange={(e) => update("amount_deposited", e.target.value)}
                 />
               </div>
-            </div>
-
-            <div className="flex items-center justify-between rounded-lg border border-border bg-navy-soft/30 px-4 py-3">
-              <span className="text-xs font-medium text-muted-foreground">
-                {plotsRequested || 0} plot(s) × {naira.format(estate.price_per_plot)}
-              </span>
-              <span className="text-sm font-bold text-navy">
-                Total Due: {naira.format(totalDue || 0)}
-              </span>
+              <div className="flex flex-col justify-center gap-1 rounded-lg border border-border bg-navy-soft/30 px-4 py-3 text-xs">
+                <div className="flex items-center justify-between text-muted-foreground">
+                  <span>
+                    Subtotal ({plotsRequested || 0} × {naira.format(estate.price_per_plot)})
+                  </span>
+                  <span className="font-semibold text-navy">{naira.format(subtotal || 0)}</span>
+                </div>
+                {discountAmount > 0 && (
+                  <div className="flex items-center justify-between text-emerald-700">
+                    <span>Sales Discount</span>
+                    <span className="font-semibold">-{naira.format(discountAmount)}</span>
+                  </div>
+                )}
+                <div className="mt-1 flex items-center justify-between border-t border-border pt-1">
+                  <span className="font-semibold text-navy">Total Due</span>
+                  <span className="text-sm font-bold text-navy">{naira.format(totalDue || 0)}</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -443,3 +508,5 @@ export function EstateSubscriberForm({
     </div>
   );
 }
+
+export default EstateSubscriberForm;

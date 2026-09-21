@@ -68,7 +68,11 @@ export function InvoiceLoader({
       const numberOfPlots = subscriber.number_of_plots ?? 0;
       const unitPrice = pricePerPlot ?? 0;
       const amount = unitPrice * numberOfPlots;
-      const discount = subscriber.discount ?? 0;
+      // The subscribers table stores this as discount_amount (see the
+      // registration form's insert) — there is no "discount" column, so
+      // reading subscriber.discount was silently always undefined and
+      // falling back to 0 regardless of what was actually entered.
+      const discount = subscriber.discount_amount ?? 0;
 
       setLoading(false);
       setData({
