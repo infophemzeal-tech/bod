@@ -20,10 +20,10 @@ import { createClient } from "@/lib/supabase/client";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/intake", label: "Subscriber Intake", icon: UserPlus },
-  { href: "/subscribers", label: "Subscribers", icon: Users },
-  { href: "/payments", label: "Payments", icon: Wallet },
   { href: "/plots", label: "Plot Inventory", icon: Map },
+  { href: "/intake", label: "Register Customer", icon: UserPlus },
+  { href: "/subscribers", label: "Subscribers", icon: Users },
+    
   { href: "/admin", label: "Admin", icon: Settings },
 ];
 
