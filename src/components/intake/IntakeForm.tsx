@@ -22,6 +22,25 @@ const PAYMENT_OPTIONS = [
 ];
 const PLOT_PREFERENCES = ["Commercial", "Residential", "Corner Piece", "Other"];
 
+// Which fees can be toggled at intake, the FormState key each checkbox
+// reads/writes, and the FormState key holding that fee's fixed-amount
+// override (blank = use the app-wide default, e.g. % of land value or
+// the standard monthly rate). Mirrors the subscriber edit form.
+const OPTIONAL_FEES: {
+  key: "legalFeeApplicable" | "allocationFeeApplicable" | "maintenanceFeeApplicable" | "securityFeeApplicable" | "formFeeApplicable";
+  amountKey: "legalFeeAmount" | "allocationFeeAmount" | "maintenanceFeeAmount" | "securityFeeAmount" | "formFeeAmount";
+  label: string;
+  hint: string;
+}[] = [
+  { key: "legalFeeApplicable", amountKey: "legalFeeAmount", label: "Legal Fee", hint: "% of land value" },
+  { key: "allocationFeeApplicable", amountKey: "allocationFeeAmount", label: "Allocation Fee", hint: "% of land value" },
+  { key: "maintenanceFeeApplicable", amountKey: "maintenanceFeeAmount", label: "Maintenance", hint: "Monthly" },
+  { key: "securityFeeApplicable", amountKey: "securityFeeAmount", label: "Security", hint: "Monthly" },
+  { key: "formFeeApplicable", amountKey: "formFeeAmount", label: "Form Fee", hint: "One-time" },
+];
+
+const naira = new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", maximumFractionDigits: 0 });
+
 const STORAGE_KEY = "bod_intake_form_draft";
 
 function todayISO() {
@@ -54,6 +73,20 @@ type FormState = {
   customerId: string;
   salesRepName: string;
   discount: string;
+  // Optional-fee toggles. All default to true (fee applies) so a fresh
+  // intake behaves the same as before unless someone switches one off.
+  legalFeeApplicable: boolean;
+  allocationFeeApplicable: boolean;
+  maintenanceFeeApplicable: boolean;
+  securityFeeApplicable: boolean;
+  formFeeApplicable: boolean;
+  // Optional-fee fixed amounts. Empty string = no override, fall back to
+  // the app's default fee calculation (e.g. % of land value / standard rate).
+  legalFeeAmount: string;
+  allocationFeeAmount: string;
+  maintenanceFeeAmount: string;
+  securityFeeAmount: string;
+  formFeeAmount: string;
 };
 
 const INITIAL_STATE: FormState = {
@@ -82,6 +115,16 @@ const INITIAL_STATE: FormState = {
   customerId: "",
   salesRepName: "",
   discount: "",
+  legalFeeApplicable: true,
+  allocationFeeApplicable: true,
+  maintenanceFeeApplicable: true,
+  securityFeeApplicable: true,
+  formFeeApplicable: true,
+  legalFeeAmount: "",
+  allocationFeeAmount: "",
+  maintenanceFeeAmount: "",
+  securityFeeAmount: "",
+  formFeeAmount: "",
 };
 
 function Section({
@@ -232,6 +275,10 @@ export function IntakeForm() {
       return;
     }
 
+    // Blank override input -> null (use default calc elsewhere in the app);
+    // non-blank -> the number the user typed.
+    const feeAmount = (v: string) => (v.trim() === "" ? null : Number(v));
+
     setSubmitting(true);
 
     const supabase = createClient();
@@ -263,6 +310,16 @@ export function IntakeForm() {
       sales_rep_name: toTitleCase(form.salesRepName) || null,
       discount_amount: discountAmount,
       status,
+      legal_fee_applicable: form.legalFeeApplicable,
+      allocation_fee_applicable: form.allocationFeeApplicable,
+      maintenance_fee_applicable: form.maintenanceFeeApplicable,
+      security_fee_applicable: form.securityFeeApplicable,
+      form_fee_applicable: form.formFeeApplicable,
+      legal_fee_amount: feeAmount(form.legalFeeAmount),
+      allocation_fee_amount: feeAmount(form.allocationFeeAmount),
+      maintenance_fee_amount: feeAmount(form.maintenanceFeeAmount),
+      security_fee_amount: feeAmount(form.securityFeeAmount),
+      form_fee_amount: feeAmount(form.formFeeAmount),
     });
 
     setSubmitting(false);
@@ -456,7 +513,52 @@ export function IntakeForm() {
           </div>
         </Section>
 
-        <Section step="4" title="Referral" subtitle="Who introduced the subscriber to BOD Properties">
+        <Section step="4" title="Fee Applicability" subtitle="Turn off any fee that doesn't apply, and optionally fix a custom price for this subscriber (leave blank to use the default)">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            {OPTIONAL_FEES.map(({ key, amountKey, label, hint }) => {
+              const checked = form[key];
+              const amount = form[amountKey];
+              return (
+                <div
+                  key={key}
+                  className={`rounded-md border p-3 text-sm transition-colors ${checked ? "border-navy bg-navy-soft" : "border-input bg-surface"}`}
+                >
+                  <label className="flex cursor-pointer items-start justify-between gap-2">
+                    <span className="min-w-0">
+                      <span className="block font-semibold">{label}</span>
+                      <span className="block text-xs text-muted-foreground">{checked ? hint : "Not applicable"}</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => set(key, e.target.checked)}
+                      className="mt-0.5 h-4 w-4 shrink-0 rounded accent-navy"
+                    />
+                  </label>
+                  <div className="mt-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="Default"
+                      value={amount}
+                      onChange={(e) => set(amountKey, e.target.value)}
+                      disabled={!checked}
+                      className="field h-8 text-xs disabled:opacity-50"
+                    />
+                    {checked && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {amount.trim() === "" ? "Using default price" : `Fixed at ${naira.format(Number(amount) || 0)}`}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+
+        <Section step="5" title="Referral" subtitle="Who introduced the subscriber to BOD Properties">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Referrer Name">
               <input className="field" placeholder="Mrs. Ifeoma Nnamdi" value={form.referrerName} onChange={(e) => set("referrerName", e.target.value)} />

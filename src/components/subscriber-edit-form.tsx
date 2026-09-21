@@ -18,6 +18,24 @@ const PLOT_PREFERENCES = ["Commercial", "Residential", "Corner Piece", "Other"];
 const STATUSES = ["draft", "registered", "completed"] as const;
 const PAYMENT_TERM_MONTHS = 12;
 
+// Which fees can be toggled per subscriber, the FormState key each
+// checkbox reads/writes, and the FormState key holding that fee's
+// per-subscriber custom amount override (blank = use the app-wide default,
+// e.g. % of land value or the standard monthly rate).
+// Order here drives the render order in the "Fee Applicability" section below.
+const OPTIONAL_FEES: {
+  key: "legalFeeApplicable" | "allocationFeeApplicable" | "maintenanceFeeApplicable" | "securityFeeApplicable" | "formFeeApplicable";
+  amountKey: "legalFeeAmount" | "allocationFeeAmount" | "maintenanceFeeAmount" | "securityFeeAmount" | "formFeeAmount";
+  label: string;
+  hint: string;
+}[] = [
+  { key: "legalFeeApplicable", amountKey: "legalFeeAmount", label: "Legal Fee", hint: "% of land value" },
+  { key: "allocationFeeApplicable", amountKey: "allocationFeeAmount", label: "Allocation Fee", hint: "% of land value" },
+  { key: "maintenanceFeeApplicable", amountKey: "maintenanceFeeAmount", label: "Maintenance", hint: "Monthly" },
+  { key: "securityFeeApplicable", amountKey: "securityFeeAmount", label: "Security", hint: "Monthly" },
+  { key: "formFeeApplicable", amountKey: "formFeeAmount", label: "Survey", hint: "One-time" },
+];
+
 const naira = new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", maximumFractionDigits: 0 });
 
 type EstatePrice = { name: string; price_per_plot: number; };
@@ -51,6 +69,20 @@ type FormState = {
   discountAmount: string;
   amountPurchased: string;
   amountDeposited: string;
+  // Optional-fee toggles. All default to true (fee applies) so existing
+  // subscribers behave exactly as before unless someone switches one off.
+  legalFeeApplicable: boolean;
+  allocationFeeApplicable: boolean;
+  maintenanceFeeApplicable: boolean;
+  securityFeeApplicable: boolean;
+  formFeeApplicable: boolean;
+  // Optional-fee custom amounts. Empty string = no override, fall back to
+  // the app's default fee calculation (e.g. % of land value / standard rate).
+  legalFeeAmount: string;
+  allocationFeeAmount: string;
+  maintenanceFeeAmount: string;
+  securityFeeAmount: string;
+  formFeeAmount: string;
 };
 
 function Section({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
@@ -94,43 +126,58 @@ export function SubscriberEditForm({ id }: { id: string }) {
       setLoading(false);
       if (error) { setLoadError(error.message); return; }
 
-      const estateList = (estateData as EstatePrice[])?? [];
+      const estateList = (estateData as EstatePrice[]) ?? [];
       setEstates(estateList);
       const map: Record<string, number> = {};
       for (const e of estateList) map[e.name] = Number(e.price_per_plot) || 0;
       setEstatePriceMap(map);
 
-      const hasAllocation =!!data.physical_allocation_date;
+      const hasAllocation = !!data.physical_allocation_date;
 
       setForm({
-        title: data.title?? "Mr",
-        surname: data.surname?? "",
-        otherNames: data.other_names?? "",
-        dateOfBirth: data.date_of_birth?? "",
-        email: data.email?? "",
-        phone: data.phone?? "",
-        contactAddress: data.contact_address?? "",
-        profession: data.profession?? "",
-        occupation: data.occupation?? "",
-        employerName: data.employer_name?? "",
-        employerPhone: data.employer_phone?? "",
-        employerAddress: data.employer_address?? "",
-        paymentOption: data.payment_option?? "Monthly",
-        numberOfPlots: String(data.number_of_plots?? "1"),
-        preferredEstate: data.preferred_estate?? estateList[0]?.name?? "",
-        plotPreference: data.plot_preference?? [],
-        plotPreferenceOther: data.plot_preference_other?? "",
-        referrerName: data.referrer_name?? "",
-        referrerOccupation: data.referrer_occupation?? "",
-        referrerPhone: data.referrer_phone?? "",
-        referrerAddress: data.referrer_address?? "",
-        status: (data.status as any)?? "draft",
-        subscribedOn: data.subscribed_on? new Date(data.subscribed_on).toISOString().slice(0,10) : new Date(data.created_at).toISOString().slice(0,10),
-        allocationDate: data.physical_allocation_date? new Date(data.physical_allocation_date).toISOString().slice(0,10) : new Date().toISOString().slice(0,10),
+        title: data.title ?? "Mr",
+        surname: data.surname ?? "",
+        otherNames: data.other_names ?? "",
+        dateOfBirth: data.date_of_birth ?? "",
+        email: data.email ?? "",
+        phone: data.phone ?? "",
+        contactAddress: data.contact_address ?? "",
+        profession: data.profession ?? "",
+        occupation: data.occupation ?? "",
+        employerName: data.employer_name ?? "",
+        employerPhone: data.employer_phone ?? "",
+        employerAddress: data.employer_address ?? "",
+        paymentOption: data.payment_option ?? "Monthly",
+        numberOfPlots: String(data.number_of_plots ?? "1"),
+        preferredEstate: data.preferred_estate ?? estateList[0]?.name ?? "",
+        plotPreference: data.plot_preference ?? [],
+        plotPreferenceOther: data.plot_preference_other ?? "",
+        referrerName: data.referrer_name ?? "",
+        referrerOccupation: data.referrer_occupation ?? "",
+        referrerPhone: data.referrer_phone ?? "",
+        referrerAddress: data.referrer_address ?? "",
+        status: (data.status as any) ?? "draft",
+        subscribedOn: data.subscribed_on ? new Date(data.subscribed_on).toISOString().slice(0,10) : new Date(data.created_at).toISOString().slice(0,10),
+        allocationDate: data.physical_allocation_date ? new Date(data.physical_allocation_date).toISOString().slice(0,10) : new Date().toISOString().slice(0,10),
         isAllocated: hasAllocation,
-        discountAmount: String(data.discount_amount?? "0"),
-        amountPurchased: String(data.amount_purchased?? ""),
-        amountDeposited: String(data.amount_deposited?? "0"),
+        discountAmount: String(data.discount_amount ?? "0"),
+        amountPurchased: String(data.amount_purchased ?? ""),
+        amountDeposited: String(data.amount_deposited ?? "0"),
+        // `?? true`: an unset column (older record, or migration not yet
+        // run) is treated as the fee being applicable, same default as
+        // the detail page's `isApplicable()`.
+        legalFeeApplicable: data.legal_fee_applicable ?? true,
+        allocationFeeApplicable: data.allocation_fee_applicable ?? true,
+        maintenanceFeeApplicable: data.maintenance_fee_applicable ?? true,
+        securityFeeApplicable: data.security_fee_applicable ?? true,
+        formFeeApplicable: data.form_fee_applicable ?? true,
+        // Custom amounts: blank string if the column is null, meaning
+        // "no override — use the default calculation".
+        legalFeeAmount: data.legal_fee_amount != null ? String(data.legal_fee_amount) : "",
+        allocationFeeAmount: data.allocation_fee_amount != null ? String(data.allocation_fee_amount) : "",
+        maintenanceFeeAmount: data.maintenance_fee_amount != null ? String(data.maintenance_fee_amount) : "",
+        securityFeeAmount: data.security_fee_amount != null ? String(data.security_fee_amount) : "",
+        formFeeAmount: data.form_fee_amount != null ? String(data.form_fee_amount) : "",
       });
     }
     load();
@@ -151,8 +198,8 @@ export function SubscriberEditForm({ id }: { id: string }) {
     return { plots, estatePrice, calculated, landValue, payable, outstanding, dueDate, expired };
   }, [form, estatePriceMap]);
 
-  function set<K extends keyof FormState>(key: K, value: FormState[K]) { setForm((prev) => (prev? {...prev, [key]: value } : prev)); }
-  function togglePlotPreference(value: string) { setForm((prev) => prev? {...prev, plotPreference: prev.plotPreference.includes(value)? prev.plotPreference.filter((v) => v!== value) : [...prev.plotPreference, value] } : prev); }
+  function set<K extends keyof FormState>(key: K, value: FormState[K]) { setForm((prev) => (prev ? {...prev, [key]: value } : prev)); }
+  function togglePlotPreference(value: string) { setForm((prev) => prev ? {...prev, plotPreference: prev.plotPreference.includes(value) ? prev.plotPreference.filter((v) => v !== value) : [...prev.plotPreference, value] } : prev); }
 
   // Dynamic allocation toggle
   function toggleAllocation() {
@@ -170,12 +217,16 @@ export function SubscriberEditForm({ id }: { id: string }) {
 
   async function handleSave() {
     if (!form) return;
-    if (!form.surname ||!form.otherNames ||!form.phone) { pushToast("error", "Surname, other names and phone are required."); return; }
+    if (!form.surname || !form.otherNames || !form.phone) { pushToast("error", "Surname, other names and phone are required."); return; }
     setSaving(true);
     const supabase = createClient();
     const plots = Number(form.numberOfPlots) || 0;
     const calculatedValue = (estatePriceMap[form.preferredEstate] || 0) * plots;
     const finalAmountPurchased = Number(form.amountPurchased) || calculatedValue || null;
+
+    // Blank override input -> null (use default calc elsewhere in the app);
+    // non-blank -> the number the admin typed.
+    const feeAmount = (v: string) => (v.trim() === "" ? null : Number(v));
 
     const { error } = await supabase.from("subscribers").update({
       title: form.title,
@@ -200,21 +251,31 @@ export function SubscriberEditForm({ id }: { id: string }) {
       referrer_phone: form.referrerPhone || null,
       referrer_address: toTitleCase(form.referrerAddress) || null,
       status: form.status,
-      subscribed_on: form.subscribedOn? new Date(form.subscribedOn).toISOString() : null,
-      physical_allocation_date: form.isAllocated? (form.allocationDate? new Date(form.allocationDate).toISOString() : new Date().toISOString()) : null,
+      subscribed_on: form.subscribedOn ? new Date(form.subscribedOn).toISOString() : null,
+      physical_allocation_date: form.isAllocated ? (form.allocationDate ? new Date(form.allocationDate).toISOString() : new Date().toISOString()) : null,
       discount_amount: Number(form.discountAmount) || 0,
       amount_purchased: finalAmountPurchased,
       amount_deposited: Number(form.amountDeposited) || 0,
+      legal_fee_applicable: form.legalFeeApplicable,
+      allocation_fee_applicable: form.allocationFeeApplicable,
+      maintenance_fee_applicable: form.maintenanceFeeApplicable,
+      security_fee_applicable: form.securityFeeApplicable,
+      form_fee_applicable: form.formFeeApplicable,
+      legal_fee_amount: feeAmount(form.legalFeeAmount),
+      allocation_fee_amount: feeAmount(form.allocationFeeAmount),
+      maintenance_fee_amount: feeAmount(form.maintenanceFeeAmount),
+      security_fee_amount: feeAmount(form.securityFeeAmount),
+      form_fee_amount: feeAmount(form.formFeeAmount),
     }).eq("id", id);
 
     setSaving(false);
     if (error) { pushToast("error", `Save failed: ${error.message}`); return; }
-    pushToast("ok", form.isAllocated? `Allocated on ${form.allocationDate} - Yes` : "Allocation set to Nil");
+    pushToast("ok", form.isAllocated ? `Allocated on ${form.allocationDate} - Yes` : "Allocation set to Nil");
     router.push(`/subscribers/${id}`);
   }
 
   if (loading) return (<div className="flex items-center justify-center gap-2 p-16 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading subscriber...</div>);
-  if (loadError ||!form ||!financialPreview) return (<div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{loadError?? "Subscriber not found."}</span></div>);
+  if (loadError || !form || !financialPreview) return (<div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{loadError ?? "Subscriber not found."}</span></div>);
 
   return (
     <div className="space-y-6">
@@ -222,19 +283,19 @@ export function SubscriberEditForm({ id }: { id: string }) {
       <Link href={`/subscribers/${id}`} className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-navy"><ArrowLeft className="h-4 w-4" /> Back to subscriber</Link>
 
       {/* Payment term + allocation preview */}
-      <div className={`panel p-4 flex flex-wrap gap-4 items-center justify-between ${financialPreview.expired? "border-red-200 bg-red-50" : "bg-navy-soft/40"}`}>
+      <div className={`panel p-4 flex flex-wrap gap-4 items-center justify-between ${financialPreview.expired ? "border-red-200 bg-red-50" : "bg-navy-soft/40"}`}>
         <div className="flex gap-6 text-sm flex-wrap">
           <div><span className="text-muted-foreground">Subscribed:</span> <span className="font-bold ml-1">{form.subscribedOn || "—"}</span></div>
-          <div><span className="text-muted-foreground">Due Date (12mo):</span> <span className="font-bold ml-1">{financialPreview.dueDate? financialPreview.dueDate.toISOString().slice(0,10) : "—"}</span></div>
+          <div><span className="text-muted-foreground">Due Date (12mo):</span> <span className="font-bold ml-1">{financialPreview.dueDate ? financialPreview.dueDate.toISOString().slice(0,10) : "—"}</span></div>
           <div className="flex items-center gap-2"><span className="text-muted-foreground">Allocation:</span>
-            <button type="button" onClick={toggleAllocation} className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ring-1 transition-all hover:scale-105 ${form.isAllocated? "bg-emerald-100 text-emerald-700 ring-emerald-600/20" : "bg-zinc-100 text-zinc-600 ring-zinc-300"}`}>
-              {form.isAllocated? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />} {form.isAllocated? "Yes" : "Nil"}
+            <button type="button" onClick={toggleAllocation} className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ring-1 transition-all hover:scale-105 ${form.isAllocated ? "bg-emerald-100 text-emerald-700 ring-emerald-600/20" : "bg-zinc-100 text-zinc-600 ring-zinc-300"}`}>
+              {form.isAllocated ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />} {form.isAllocated ? "Yes" : "Nil"}
             </button>
             {form.isAllocated && <span className="font-bold text-xs">{form.allocationDate}</span>}
           </div>
-          <div><span className="text-muted-foreground">Outstanding:</span> <span className={`font-bold ml-1 ${financialPreview.expired? "text-red-600" : financialPreview.outstanding===0? "text-emerald-600" : "text-amber-600"}`}>{naira.format(financialPreview.outstanding)}</span></div>
+          <div><span className="text-muted-foreground">Outstanding:</span> <span className={`font-bold ml-1 ${financialPreview.expired ? "text-red-600" : financialPreview.outstanding===0 ? "text-emerald-600" : "text-amber-600"}`}>{naira.format(financialPreview.outstanding)}</span></div>
         </div>
-        {financialPreview.expired? <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-700"><Clock className="h-3 w-3" /> Expired</span> : financialPreview.outstanding===0? <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">Paid - Closed</span> : <span className="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-700">Active - 12 months term</span>}
+        {financialPreview.expired ? <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-3 py-1 text-xs font-bold text-red-700"><Clock className="h-3 w-3" /> Expired</span> : financialPreview.outstanding===0 ? <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">Paid - Closed</span> : <span className="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-700">Active - 12 months term</span>}
       </div>
 
       <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleSave(); }}>
@@ -256,8 +317,8 @@ export function SubscriberEditForm({ id }: { id: string }) {
             <div>
               <label className="label-field">Allocation Status (Dynamic)</label>
               <div className="flex gap-2 mt-1">
-                <button type="button" onClick={() => setForm(prev => prev? {...prev, isAllocated: true, allocationDate: prev.allocationDate || new Date().toISOString().slice(0,10)} : prev)} className={`flex-1 inline-flex items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-bold transition-colors ${form.isAllocated? "bg-emerald-600 text-white border-emerald-600" : "bg-surface border-input hover:bg-muted"}`}><CheckCircle2 className="h-4 w-4" /> Yes - Allocated</button>
-                <button type="button" onClick={() => setForm(prev => prev? {...prev, isAllocated: false } : prev)} className={`flex-1 inline-flex items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-bold transition-colors ${!form.isAllocated? "bg-zinc-800 text-white border-zinc-800" : "bg-surface border-input hover:bg-muted"}`}><XCircle className="h-4 w-4" /> Nil - Not Allocated</button>
+                <button type="button" onClick={() => setForm(prev => prev ? {...prev, isAllocated: true, allocationDate: prev.allocationDate || new Date().toISOString().slice(0,10)} : prev)} className={`flex-1 inline-flex items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-bold transition-colors ${form.isAllocated ? "bg-emerald-600 text-white border-emerald-600" : "bg-surface border-input hover:bg-muted"}`}><CheckCircle2 className="h-4 w-4" /> Yes - Allocated</button>
+                <button type="button" onClick={() => setForm(prev => prev ? {...prev, isAllocated: false } : prev)} className={`flex-1 inline-flex items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-bold transition-colors ${!form.isAllocated ? "bg-zinc-800 text-white border-zinc-800" : "bg-surface border-input hover:bg-muted"}`}><XCircle className="h-4 w-4" /> Nil - Not Allocated</button>
               </div>
             </div>
             <Field label="Physical Allocation Date">
@@ -265,13 +326,58 @@ export function SubscriberEditForm({ id }: { id: string }) {
                 <input className="field flex-1" type="date" value={form.allocationDate} onChange={(e) => set("allocationDate", e.target.value)} disabled={!form.isAllocated} />
                 {form.isAllocated && <button type="button" onClick={() => set("allocationDate", new Date().toISOString().slice(0,10))} className="rounded-md border bg-surface px-3 text-xs font-semibold">Today</button>}
               </div>
-              <p className="mt-1 text- text-muted-foreground">{form.isAllocated? `Allocated on ${form.allocationDate}` : "No allocation yet - Nil"}</p>
+              <p className="mt-1 text- text-muted-foreground">{form.isAllocated ? `Allocated on ${form.allocationDate}` : "No allocation yet - Nil"}</p>
             </Field>
             <Field label="Allocation Preview">
-              <div className={`rounded-md border p-3 text-sm flex items-center gap-2 ${form.isAllocated? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-zinc-50 border-zinc-200 text-zinc-600"}`}>
-                <MapPin className="h-4 w-4" /> {form.isAllocated? `Yes - Allocated ${form.allocationDate}` : "Nil - Not yet allocated"}
+              <div className={`rounded-md border p-3 text-sm flex items-center gap-2 ${form.isAllocated ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-zinc-50 border-zinc-200 text-zinc-600"}`}>
+                <MapPin className="h-4 w-4" /> {form.isAllocated ? `Yes - Allocated ${form.allocationDate}` : "Nil - Not yet allocated"}
               </div>
             </Field>
+          </div>
+        </Section>
+
+        <Section title="Fee Applicability" subtitle="Turn off any fee that doesn't apply, and optionally fix a custom price for this subscriber (leave blank to use the default)">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            {OPTIONAL_FEES.map(({ key, amountKey, label, hint }) => {
+              const checked = form[key];
+              const amount = form[amountKey];
+              return (
+                <div
+                  key={key}
+                  className={`rounded-md border p-3 text-sm transition-colors ${checked ? "border-navy bg-navy-soft" : "border-input bg-surface"}`}
+                >
+                  <label className="flex cursor-pointer items-start justify-between gap-2">
+                    <span className="min-w-0">
+                      <span className="block font-semibold">{label}</span>
+                      <span className="block text-xs text-muted-foreground">{checked ? hint : "Not applicable"}</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => set(key, e.target.checked)}
+                      className="mt-0.5 h-4 w-4 shrink-0 rounded accent-navy"
+                    />
+                  </label>
+                  <div className="mt-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="Default"
+                      value={amount}
+                      onChange={(e) => set(amountKey, e.target.value)}
+                      disabled={!checked}
+                      className="field h-8 text-xs disabled:opacity-50"
+                    />
+                    {checked && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {amount.trim() === "" ? "Using default price" : `Fixed at ${naira.format(Number(amount) || 0)}`}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </Section>
 
@@ -290,13 +396,13 @@ export function SubscriberEditForm({ id }: { id: string }) {
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 <Field label="Number of Plots"><input className="field" type="number" step="0.5" min="0.5" value={form.numberOfPlots} onChange={(e) => set("numberOfPlots", e.target.value)} /></Field>
                 <Field label="Preferred Estate"><select className="field" value={form.preferredEstate} onChange={(e) => set("preferredEstate", e.target.value)}>{estates.map((estate) => <option key={estate.name} value={estate.name}>{estate.name} - {naira.format(estate.price_per_plot)}/plot</option>)}</select></Field>
-                <Field label="Plot Price (auto)"><input className="field bg-muted" value={financialPreview.estatePrice? naira.format(financialPreview.estatePrice) : "—"} disabled /></Field>
+                <Field label="Plot Price (auto)"><input className="field bg-muted" value={financialPreview.estatePrice ? naira.format(financialPreview.estatePrice) : "—"} disabled /></Field>
                 <Field label="Land Value"><input className="field bg-muted" value={naira.format(financialPreview.landValue)} disabled /></Field>
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-3">
                 <Field label="Discount Amount"><input className="field" type="number" value={form.discountAmount} onChange={(e) => set("discountAmount", e.target.value)} /></Field>
                 <Field label="Total Payable"><input className="field bg-muted font-bold" value={naira.format(financialPreview.payable)} disabled /></Field>
-                <Field label="Outstanding"><input className={`field font-bold ${financialPreview.expired? "text-red-600 bg-red-50" : ""}`} value={naira.format(financialPreview.outstanding)} disabled /></Field>
+                <Field label="Outstanding"><input className={`field font-bold ${financialPreview.expired ? "text-red-600 bg-red-50" : ""}`} value={naira.format(financialPreview.outstanding)} disabled /></Field>
               </div>
             </div>
             <div>
@@ -319,7 +425,7 @@ export function SubscriberEditForm({ id }: { id: string }) {
 
         <div className="flex justify-end gap-3 pb-2">
           <Link href={`/subscribers/${id}`} className="inline-flex items-center justify-center rounded-md border border-input bg-surface px-5 py-2.5 text-sm font-semibold hover:bg-muted">Cancel</Link>
-          <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-md bg-navy px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-navy-deep disabled:opacity-50">{saving? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Changes</button>
+          <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-md bg-navy px-6 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-navy-deep disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Changes</button>
         </div>
       </form>
     </div>
