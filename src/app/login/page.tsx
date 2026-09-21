@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, type FormEvent } from "react";
+import { Suspense, useState, type FormEvent, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2 } from "lucide-react";
@@ -15,13 +15,46 @@ function LoginForm() {
 
   const redirectedFrom = searchParams.get("redirectedFrom");
   const unauthorized = searchParams.get("error") === "unauthorized";
+  const deactivated = searchParams.get("error") === "deactivated";
 
-  // prevent open redirect vulnerability - only allow internal paths
   const getSafeRedirect = (path: string | null) => {
+    // Default landing page after a plain login (no redirectedFrom) is
+    // now /plots instead of the dashboard root.
     if (!path) return "/";
     if (!path.startsWith("/") || path.startsWith("//")) return "/";
+    if (path.includes(":")) return "/";
     return path;
   };
+
+  // If someone who's already signed in lands on /login (e.g. clicked a
+  // stale bookmark, or hit back after logging in), skip the form and
+  // send them straight on instead of asking them to sign in again.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (active && session) {
+        router.replace(getSafeRedirect(redirectedFrom));
+      }
+    })();
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onUnhandled = (e: PromiseRejectionEvent) => {
+      if (e.reason?.name === "AbortError" && String(e.reason?.message).includes("play()")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("unhandledrejection", onUnhandled);
+    return () => window.removeEventListener("unhandledrejection", onUnhandled);
+  }, []);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -30,7 +63,7 @@ function LoginForm() {
 
     try {
       const supabase = createClient();
-      const { error: signInError } = await supabase.auth.signInWithPassword({
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
@@ -40,7 +73,12 @@ function LoginForm() {
         return;
       }
 
-      // This maintains your server context / middleware session
+      if (!data.session) {
+        setError("Login failed - no session created. Check Supabase URL/Anon key.");
+        return;
+      }
+
+      // CRITICAL: replace first, then refresh to sync server cookie
       router.replace(getSafeRedirect(redirectedFrom));
       router.refresh();
     } catch (err: any) {
@@ -64,7 +102,11 @@ function LoginForm() {
           You don&apos;t have permission to view that page.
         </div>
       )}
-
+      {deactivated && (
+        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          This account has been deactivated. Contact admin.
+        </div>
+      )}
       {error && (
         <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
@@ -87,7 +129,6 @@ function LoginForm() {
             placeholder="you@bodproperties.com"
           />
         </div>
-
         <div>
           <label htmlFor="password" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Password
@@ -103,11 +144,10 @@ function LoginForm() {
             placeholder="••••••••"
           />
         </div>
-
         <button
           type="submit"
           disabled={loading}
-          className="flex w-full items-center justify-center gap-2 rounded-md bg-navy px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-navy-deep disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-2 rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white hover:bg-navy-deep disabled:opacity-50"
         >
           {loading && <Loader2 className="h-4 w-4 animate-spin" />}
           {loading ? "Signing in..." : "Sign in"}
@@ -125,4 +165,4 @@ export default function LoginPage() {
       </Suspense>
     </div>
   );
-} 
+}

@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Building2,
   LayoutDashboard,
@@ -13,6 +13,7 @@ import {
   Users,
   Settings,
   LogOut,
+  LogIn,
   Menu,
   X,
 } from "lucide-react";
@@ -23,7 +24,7 @@ const NAV_ITEMS = [
   { href: "/plots", label: "Plot Inventory", icon: Map },
   { href: "/intake", label: "Register Customer", icon: UserPlus },
   { href: "/subscribers", label: "Subscribers", icon: Users },
-    
+
   { href: "/admin", label: "Admin", icon: Settings },
 ];
 
@@ -31,6 +32,26 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    const supabase = createClient();
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsAuthenticated(!!session);
+      setAuthChecked(true);
+    });
+
+    // Keep this in sync if the user signs in/out in another tab, or via
+    // the login page's own redirect-on-existing-session check.
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthenticated(!!session);
+      setAuthChecked(true);
+    });
+
+    return () => listener.subscription.unsubscribe();
+  }, []);
 
   async function handleLogout() {
     const supabase = createClient();
@@ -68,14 +89,25 @@ export function AppShell({ children }: { children: ReactNode }) {
         })}
       </nav>
       <div className="border-t border-navy-soft px-3 py-3">
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-primary-foreground/80 transition-colors hover:bg-navy-soft hover:text-primary-foreground"
-        >
-          <LogOut className="h-4 w-4" />
-          Log out
-        </button>
+        {!authChecked ? null : isAuthenticated ? (
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-primary-foreground/80 transition-colors hover:bg-navy-soft hover:text-primary-foreground"
+          >
+            <LogOut className="h-4 w-4" />
+            Log out
+          </button>
+        ) : (
+          <Link
+            href="/login"
+            onClick={() => setMobileOpen(false)}
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-primary-foreground/80 transition-colors hover:bg-navy-soft hover:text-primary-foreground"
+          >
+            <LogIn className="h-4 w-4" />
+            Sign in
+          </Link>
+        )}
       </div>
     </>
   );
