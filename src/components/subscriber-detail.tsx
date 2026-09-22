@@ -271,15 +271,14 @@ export function SubscriberDetail({ id }: { id: string }) {
       form: isApplicable(subscriber.form_fee_applicable),
     };
 
-   const otherFees: FeeRow[] = (
-  [
-    { key: "legal", label: "Legal Fee", due: applicability.legal ? legalDue : 0, paid: 0, outstanding: 0, note: !applicability.legal ? "Not applicable" : legalOverride != null ? `Fixed at ${naira.format(legalDue)}` : `${legalPct}% of land value`, icon: Receipt, applicable: applicability.legal },
-    { key: "allocation", label: "Allocation Fee", due: applicability.allocation ? allocDue : 0, paid: 0, outstanding: 0, note: !applicability.allocation ? "Not applicable" : allocOverride != null ? `Fixed at ${naira.format(allocDue)}` : `${allocPct}% of land value`, icon: FilePenLine, applicable: applicability.allocation },
-    { key: "maintenance", label: "Maintenance", due: applicability.maintenance ? maintDue : 0, paid: 0, outstanding: 0, note: !applicability.maintenance ? "Not applicable" : maintOverride != null ? `Fixed at ${naira.format(maintDue)}` : `${naira.format(MONTHLY_MAINTENANCE_FEE)}/mo × ${months} mo`, icon: Wrench, applicable: applicability.maintenance },
-    { key: "security", label: "Security", due: applicability.security ? secDue : 0, paid: 0, outstanding: 0, note: !applicability.security ? "Not applicable" : secOverride != null ? `Fixed at ${naira.format(secDue)}` : `${naira.format(MONTHLY_SECURITY_FEE)}/mo × ${months} mo`, icon: Shield, applicable: applicability.security },
-    { key: "form", label: "Survey", due: applicability.form ? formDue : 0, paid: 0, outstanding: 0, note: !applicability.form ? "Not applicable" : formOverride != null ? `Fixed at ${naira.format(formDue)}` : "One-time onboarding", icon: FileText, applicable: applicability.form },
-  ] as Array<Omit<FeeRow, "paid" | "outstanding">>
-).map(f => {
+    const feeDefs: Array<Pick<FeeRow, "key" | "label" | "due" | "note" | "icon" | "applicable">> = [
+      { key: "legal", label: "Legal Fee", due: applicability.legal ? legalDue : 0, note: !applicability.legal ? "Not applicable" : legalOverride != null ? `Fixed at ${naira.format(legalDue)}` : `${legalPct}% of land value`, icon: Receipt, applicable: applicability.legal },
+      { key: "allocation", label: "Allocation Fee", due: applicability.allocation ? allocDue : 0, note: !applicability.allocation ? "Not applicable" : allocOverride != null ? `Fixed at ${naira.format(allocDue)}` : `${allocPct}% of land value`, icon: FilePenLine, applicable: applicability.allocation },
+      { key: "maintenance", label: "Maintenance", due: applicability.maintenance ? maintDue : 0, note: !applicability.maintenance ? "Not applicable" : maintOverride != null ? `Fixed at ${naira.format(maintDue)}` : `${naira.format(MONTHLY_MAINTENANCE_FEE)}/mo × ${months} mo`, icon: Wrench, applicable: applicability.maintenance },
+      { key: "security", label: "Security", due: applicability.security ? secDue : 0, note: !applicability.security ? "Not applicable" : secOverride != null ? `Fixed at ${naira.format(secDue)}` : `${naira.format(MONTHLY_SECURITY_FEE)}/mo × ${months} mo`, icon: Shield, applicable: applicability.security },
+      { key: "form", label: "Survey", due: applicability.form ? formDue : 0, note: !applicability.form ? "Not applicable" : formOverride != null ? `Fixed at ${naira.format(formDue)}` : "One-time onboarding", icon: FileText, applicable: applicability.form },
+    ];
+    const otherFees: FeeRow[] = feeDefs.map(f => {
       const paid = sumByFeeType(payments, f.key);
       return { ...f, paid, outstanding: Math.max(f.due - paid, 0) };
     });

@@ -57,7 +57,7 @@ const FEE_LABELS: Record<FeeType, { label: string; color: string }> = {
   allocation: { label: "Allocation Fee", color: "bg-purple-100 text-purple-800" },
   maintenance: { label: "Maintenance Fee", color: "bg-amber-100 text-amber-800" },
   security: { label: "Security Fee", color: "bg-zinc-100 text-zinc-800" },
-  form: { label: "Survey", color: "bg-emerald-100 text-emerald-800" },
+  form: { label: "Form Fee", color: "bg-emerald-100 text-emerald-800" },
 };
 
 const MONTHLY_MAINTENANCE_FEE = 2500;
@@ -298,9 +298,7 @@ export function PaymentsPanel({ subscriberId }: { subscriberId: string }) {
       supabase
         .from("subscribers")
         .select(
-          "title,surname,other_names,phone,amount_purchased,number_of_plots,discount_amount,subscribed_on,created_at,preferred_estate,estate_id," +
-            "legal_fee_applicable,allocation_fee_applicable,maintenance_fee_applicable,security_fee_applicable,form_fee_applicable," +
-            "legal_fee_amount,allocation_fee_amount,maintenance_fee_amount,security_fee_amount,form_fee_amount"
+          "title,surname,other_names,phone,amount_purchased,number_of_plots,discount_amount,subscribed_on,created_at,preferred_estate,estate_id,legal_fee_applicable,allocation_fee_applicable,maintenance_fee_applicable,security_fee_applicable,form_fee_applicable,legal_fee_amount,allocation_fee_amount,maintenance_fee_amount,security_fee_amount,form_fee_amount"
         )
         .eq("id", subscriberId)
         .single(),
